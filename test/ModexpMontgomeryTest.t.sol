@@ -167,6 +167,54 @@ contract ModexpMontgomeryTest is Test {
         assertEq(actual, expected, "Fuzz readable bytes mismatch");
     }
 
+    // ── Targeted edge-case fuzz tests ────────────────────────────────
+
+    function testFuzz_exp_zero(uint256 base, uint256 mod) public view {
+        vm.assume(mod > 1 && mod % 2 == 1);
+        bytes memory b = abi.encodePacked(base);
+        bytes memory e = hex"00";
+        bytes memory m = abi.encodePacked(mod);
+        bytes memory expected = precompile.modexp(b, e, m);
+        assertEq(montgomery.modexp(b, e, m), expected, "montgomery exp=0 mismatch");
+        assertEq(readable.modexp(b, e, m), expected, "readable exp=0 mismatch");
+    }
+
+    function testFuzz_base_greater_than_mod(uint256 mod) public view {
+        vm.assume(mod > 1 && mod % 2 == 1 && mod < type(uint256).max - mod);
+        uint256 base = mod + mod / 2;
+        bytes memory b = abi.encodePacked(base);
+        bytes memory e = abi.encodePacked(uint256(17));
+        bytes memory m = abi.encodePacked(mod);
+        bytes memory expected = precompile.modexp(b, e, m);
+        assertEq(montgomery.modexp(b, e, m), expected, "montgomery base>mod mismatch");
+        assertEq(readable.modexp(b, e, m), expected, "readable base>mod mismatch");
+    }
+
+    function testFuzz_base_equals_mod(uint256 mod) public view {
+        vm.assume(mod > 1 && mod % 2 == 1);
+        bytes memory b = abi.encodePacked(mod);
+        bytes memory e = abi.encodePacked(uint256(17));
+        bytes memory m = abi.encodePacked(mod);
+        bytes memory expected = precompile.modexp(b, e, m);
+        assertEq(montgomery.modexp(b, e, m), expected, "montgomery base==mod mismatch");
+        assertEq(readable.modexp(b, e, m), expected, "readable base==mod mismatch");
+    }
+
+    function testFuzz_modulus_with_leading_zero_bytes(uint8 leadingZeros, uint128 modRaw) public view {
+        vm.assume(modRaw > 1 && modRaw % 2 == 1);
+        uint256 padLen = bound(leadingZeros, 1, 16);
+        bytes memory modBytes = abi.encodePacked(modRaw);
+        bytes memory mod = new bytes(padLen + modBytes.length);
+        for (uint256 i = 0; i < modBytes.length; i++) {
+            mod[padLen + i] = modBytes[i];
+        }
+        bytes memory b = abi.encodePacked(uint256(12345));
+        bytes memory e = hex"010001";
+        bytes memory expected = precompile.modexp(b, e, mod);
+        assertEq(montgomery.modexp(b, e, mod), expected, "montgomery leading-zeros mismatch");
+        assertEq(readable.modexp(b, e, mod), expected, "readable leading-zeros mismatch");
+    }
+
     function _isOne(bytes memory v) internal pure returns (bool) {
         for (uint256 i = 0; i < v.length - 1; i++) {
             if (v[i] != 0) return false;
