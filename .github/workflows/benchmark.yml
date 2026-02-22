@@ -1,0 +1,58 @@
+name: Gas Benchmarks
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run gas snapshot diff
+        id: snapshot
+        run: |
+          OUTPUT=$(forge snapshot --diff .gas-snapshot 2>&1) || true
+          echo "$OUTPUT"
+          {
+            echo 'diff<<EOF'
+            echo "$OUTPUT"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post gas diff comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `### Gas Snapshot Diff\n\n\`\`\`\n${process.env.SNAPSHOT_DIFF}\n\`\`\``;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.startsWith('### Gas Snapshot Diff')
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+        env:
+          SNAPSHOT_DIFF: ${{ steps.snapshot.outputs.diff }}
