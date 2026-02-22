@@ -15,29 +15,29 @@ library ModexpPrecompile {
         bytes memory exponent,
         bytes memory modulus
     ) internal view returns (bytes memory result) {
-        bytes memory input = abi.encodePacked(
+        uint256 mLen = modulus.length;
+
+        // Encode call args in result and reuse the buffer for the output
+        result = abi.encodePacked(
             uint256(base.length),
             uint256(exponent.length),
-            uint256(modulus.length),
+            uint256(mLen),
             base,
             exponent,
             modulus
         );
 
-        result = new bytes(modulus.length);
-
         assembly {
-            let success := staticcall(
-                gas(),
-                0x05,
-                add(input, 0x20),
-                mload(input),
-                add(result, 0x20),
-                mload(modulus)
-            )
+            let dataPtr := add(result, 0x20)
+            // Write result on top of args to avoid allocating extra memory
+            let success := staticcall(gas(), 0x05, dataPtr, mload(result), dataPtr, mLen)
             if iszero(success) {
                 revert(0, 0)
             }
+            // Overwrite the length (result.length >= mLen is guaranteed)
+            mstore(result, mLen)
+            // Set the memory pointer after the returned data
+            mstore(0x40, add(dataPtr, mLen))
         }
     }
 }

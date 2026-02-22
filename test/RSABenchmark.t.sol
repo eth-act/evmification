@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {RSAVerify} from "../src/RSAVerify.sol";
 import {RSAVerifyMontgomery} from "../src/RSAVerifyMontgomery.sol";
 import {RSAVerifyMontgomeryReadable} from "../src/RSAVerifyMontgomeryReadable.sol";
+import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
 /// @notice Thin wrapper to make library calls external for gas measurement.
 contract RSAVerifyCaller {
@@ -42,10 +43,23 @@ contract RSAVerifyMontgomeryReadableCaller {
     }
 }
 
+/// @notice Thin wrapper for OpenZeppelin RSA library for gas measurement.
+contract OZRSAVerifyCaller {
+    function verify(
+        bytes calldata message,
+        bytes calldata signature,
+        bytes calldata exponent,
+        bytes calldata modulus
+    ) external view returns (bool) {
+        return RSA.pkcs1Sha256(message, signature, exponent, modulus);
+    }
+}
+
 contract RSABenchmarkTest is Test {
     RSAVerifyCaller verifier;
     RSAVerifyMontgomeryCaller montgomeryVerifier;
     RSAVerifyMontgomeryReadableCaller readableVerifier;
+    OZRSAVerifyCaller ozVerifier;
 
     bytes constant MSG = hex"68656c6c6f"; // "hello"
     bytes constant E = hex"010001"; // 65537
@@ -62,6 +76,7 @@ contract RSABenchmarkTest is Test {
         verifier = new RSAVerifyCaller();
         montgomeryVerifier = new RSAVerifyMontgomeryCaller();
         readableVerifier = new RSAVerifyMontgomeryReadableCaller();
+        ozVerifier = new OZRSAVerifyCaller();
     }
 
     function test_rsa2048_verify() public view {
@@ -92,5 +107,15 @@ contract RSABenchmarkTest is Test {
     function test_rsa4096_verify_readable() public view {
         bool valid = readableVerifier.verify(N_4096, E, MSG, SIG_4096);
         require(valid, "Readable RSA-4096 verification failed");
+    }
+
+    function test_rsa2048_verify_oz() public view {
+        bool valid = ozVerifier.verify(MSG, SIG_2048, E, N_2048);
+        require(valid, "OZ RSA-2048 verification failed");
+    }
+
+    function test_rsa4096_verify_oz() public view {
+        bool valid = ozVerifier.verify(MSG, SIG_4096, E, N_4096);
+        require(valid, "OZ RSA-4096 verification failed");
     }
 }
