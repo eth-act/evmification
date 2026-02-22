@@ -1,0 +1,4 @@
+ModexpBenchmarkTest:test_modexp_precompile_2048() (gas: 16737)
+ModexpBenchmarkTest:test_modexp_precompile_4096() (gas: 33695)
+RSABenchmarkTest:test_rsa2048_verify() (gas: 56706)
+RSABenchmarkTest:test_rsa4096_verify() (gas: 110435)
