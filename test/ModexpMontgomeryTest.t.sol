@@ -124,4 +124,53 @@ contract ModexpMontgomeryTest is Test {
         bytes memory actual = readable.modexp(BASE_2048, expOne, N_2048);
         assertEq(actual, expected, "readable exp=1 mismatch");
     }
+
+    // ── Fuzz tests ───────────────────────────────────────────────────────
+
+    function testFuzz_montgomery_uint256(uint256 base, uint256 exp, uint256 mod) public view {
+        vm.assume(mod > 1 && mod % 2 == 1);
+        bytes memory b = abi.encodePacked(base);
+        bytes memory e = abi.encodePacked(exp);
+        bytes memory m = abi.encodePacked(mod);
+        bytes memory expected = precompile.modexp(b, e, m);
+        bytes memory actual = montgomery.modexp(b, e, m);
+        assertEq(actual, expected, "Fuzz montgomery uint256 mismatch");
+    }
+
+    function testFuzz_readable_uint256(uint256 base, uint256 exp, uint256 mod) public view {
+        vm.assume(mod > 1 && mod % 2 == 1);
+        bytes memory b = abi.encodePacked(base);
+        bytes memory e = abi.encodePacked(exp);
+        bytes memory m = abi.encodePacked(mod);
+        bytes memory expected = precompile.modexp(b, e, m);
+        bytes memory actual = readable.modexp(b, e, m);
+        assertEq(actual, expected, "Fuzz readable uint256 mismatch");
+    }
+
+    function testFuzz_montgomery_bytes(bytes memory base, bytes memory exp, bytes memory mod) public view {
+        vm.assume(mod.length >= 1 && mod.length <= 64);
+        vm.assume(base.length <= 64 && exp.length <= 64);
+        mod[mod.length - 1] |= 0x01;
+        vm.assume(!_isOne(mod));
+        bytes memory expected = precompile.modexp(base, exp, mod);
+        bytes memory actual = montgomery.modexp(base, exp, mod);
+        assertEq(actual, expected, "Fuzz montgomery bytes mismatch");
+    }
+
+    function testFuzz_readable_bytes(bytes memory base, bytes memory exp, bytes memory mod) public view {
+        vm.assume(mod.length >= 1 && mod.length <= 64);
+        vm.assume(base.length <= 64 && exp.length <= 64);
+        mod[mod.length - 1] |= 0x01;
+        vm.assume(!_isOne(mod));
+        bytes memory expected = precompile.modexp(base, exp, mod);
+        bytes memory actual = readable.modexp(base, exp, mod);
+        assertEq(actual, expected, "Fuzz readable bytes mismatch");
+    }
+
+    function _isOne(bytes memory v) internal pure returns (bool) {
+        for (uint256 i = 0; i < v.length - 1; i++) {
+            if (v[i] != 0) return false;
+        }
+        return v[v.length - 1] == 0x01;
+    }
 }
