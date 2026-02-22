@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import {Test} from "forge-std/Test.sol";
 import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
 import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
+import {ModexpMontgomeryReadable} from "../src/ModexpMontgomeryReadable.sol";
 
 contract MontgomeryModexpCaller {
     function modexp(
@@ -25,8 +26,19 @@ contract PrecompileModexpCaller {
     }
 }
 
+contract ReadableMontgomeryModexpCaller {
+    function modexp(
+        bytes calldata base,
+        bytes calldata exponent,
+        bytes calldata modulus
+    ) external view returns (bytes memory) {
+        return ModexpMontgomeryReadable.modexp(base, exponent, modulus);
+    }
+}
+
 contract ModexpMontgomeryTest is Test {
     MontgomeryModexpCaller montgomery;
+    ReadableMontgomeryModexpCaller readable;
     PrecompileModexpCaller precompile;
 
     bytes constant E = hex"010001";
@@ -39,6 +51,7 @@ contract ModexpMontgomeryTest is Test {
 
     function setUp() public {
         montgomery = new MontgomeryModexpCaller();
+        readable = new ReadableMontgomeryModexpCaller();
         precompile = new PrecompileModexpCaller();
     }
 
@@ -74,5 +87,41 @@ contract ModexpMontgomeryTest is Test {
         bytes memory expected = precompile.modexp(BASE_2048, expOne, N_2048);
         bytes memory actual = montgomery.modexp(BASE_2048, expOne, N_2048);
         assertEq(actual, expected, "exp=1 mismatch");
+    }
+
+    // ── Readable Montgomery tests ─────────────────────────────────────
+
+    function test_readable_matches_precompile_2048() public view {
+        bytes memory expected = precompile.modexp(BASE_2048, E, N_2048);
+        bytes memory actual = readable.modexp(BASE_2048, E, N_2048);
+        assertEq(actual, expected, "Readable 2048 mismatch");
+    }
+
+    function test_readable_matches_precompile_4096() public view {
+        bytes memory expected = precompile.modexp(BASE_4096, E, N_4096);
+        bytes memory actual = readable.modexp(BASE_4096, E, N_4096);
+        assertEq(actual, expected, "Readable 4096 mismatch");
+    }
+
+    function test_readable_base_zero_2048() public view {
+        bytes memory zeroBase = new bytes(256);
+        bytes memory expected = precompile.modexp(zeroBase, E, N_2048);
+        bytes memory actual = readable.modexp(zeroBase, E, N_2048);
+        assertEq(actual, expected, "readable base=0 mismatch");
+    }
+
+    function test_readable_base_one_2048() public view {
+        bytes memory oneBase = new bytes(256);
+        oneBase[255] = 0x01;
+        bytes memory expected = precompile.modexp(oneBase, E, N_2048);
+        bytes memory actual = readable.modexp(oneBase, E, N_2048);
+        assertEq(actual, expected, "readable base=1 mismatch");
+    }
+
+    function test_readable_exp_one_2048() public view {
+        bytes memory expOne = hex"01";
+        bytes memory expected = precompile.modexp(BASE_2048, expOne, N_2048);
+        bytes memory actual = readable.modexp(BASE_2048, expOne, N_2048);
+        assertEq(actual, expected, "readable exp=1 mismatch");
     }
 }

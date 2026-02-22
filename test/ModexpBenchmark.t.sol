@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import {Test} from "forge-std/Test.sol";
 import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
 import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
+import {ModexpMontgomeryReadable} from "../src/ModexpMontgomeryReadable.sol";
 
 /// @notice Thin wrapper to make library calls external for gas measurement.
 contract ModexpCaller {
@@ -26,9 +27,20 @@ contract MontgomeryModexpBenchCaller {
     }
 }
 
+contract ReadableMontgomeryModexpBenchCaller {
+    function modexp(
+        bytes calldata base,
+        bytes calldata exponent,
+        bytes calldata modulus
+    ) external view returns (bytes memory) {
+        return ModexpMontgomeryReadable.modexp(base, exponent, modulus);
+    }
+}
+
 contract ModexpBenchmarkTest is Test {
     ModexpCaller caller;
     MontgomeryModexpBenchCaller montgomeryCaller;
+    ReadableMontgomeryModexpBenchCaller readableCaller;
 
     // Exponent e=65537
     bytes constant E = hex"010001";
@@ -44,6 +56,7 @@ contract ModexpBenchmarkTest is Test {
     function setUp() public {
         caller = new ModexpCaller();
         montgomeryCaller = new MontgomeryModexpBenchCaller();
+        readableCaller = new ReadableMontgomeryModexpBenchCaller();
     }
 
     function test_modexp_precompile_2048() public view {
@@ -60,5 +73,13 @@ contract ModexpBenchmarkTest is Test {
 
     function test_modexp_montgomery_4096() public view {
         montgomeryCaller.modexp(BASE_4096, E, N_4096);
+    }
+
+    function test_modexp_readable_2048() public view {
+        readableCaller.modexp(BASE_2048, E, N_2048);
+    }
+
+    function test_modexp_readable_4096() public view {
+        readableCaller.modexp(BASE_4096, E, N_4096);
     }
 }

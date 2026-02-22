@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import {Test} from "forge-std/Test.sol";
 import {RSAVerify} from "../src/RSAVerify.sol";
 import {RSAVerifyMontgomery} from "../src/RSAVerifyMontgomery.sol";
+import {RSAVerifyMontgomeryReadable} from "../src/RSAVerifyMontgomeryReadable.sol";
 
 /// @notice Thin wrapper to make library calls external for gas measurement.
 contract RSAVerifyCaller {
@@ -29,9 +30,22 @@ contract RSAVerifyMontgomeryCaller {
     }
 }
 
+/// @notice Thin wrapper for readable Montgomery library calls for gas measurement.
+contract RSAVerifyMontgomeryReadableCaller {
+    function verify(
+        bytes calldata modulus,
+        bytes calldata exponent,
+        bytes calldata message,
+        bytes calldata signature
+    ) external view returns (bool) {
+        return RSAVerifyMontgomeryReadable.verify(modulus, exponent, message, signature);
+    }
+}
+
 contract RSABenchmarkTest is Test {
     RSAVerifyCaller verifier;
     RSAVerifyMontgomeryCaller montgomeryVerifier;
+    RSAVerifyMontgomeryReadableCaller readableVerifier;
 
     bytes constant MSG = hex"68656c6c6f"; // "hello"
     bytes constant E = hex"010001"; // 65537
@@ -47,6 +61,7 @@ contract RSABenchmarkTest is Test {
     function setUp() public {
         verifier = new RSAVerifyCaller();
         montgomeryVerifier = new RSAVerifyMontgomeryCaller();
+        readableVerifier = new RSAVerifyMontgomeryReadableCaller();
     }
 
     function test_rsa2048_verify() public view {
@@ -67,5 +82,15 @@ contract RSABenchmarkTest is Test {
     function test_rsa4096_verify_montgomery() public view {
         bool valid = montgomeryVerifier.verify(N_4096, E, MSG, SIG_4096);
         require(valid, "Montgomery RSA-4096 verification failed");
+    }
+
+    function test_rsa2048_verify_readable() public view {
+        bool valid = readableVerifier.verify(N_2048, E, MSG, SIG_2048);
+        require(valid, "Readable RSA-2048 verification failed");
+    }
+
+    function test_rsa4096_verify_readable() public view {
+        bool valid = readableVerifier.verify(N_4096, E, MSG, SIG_4096);
+        require(valid, "Readable RSA-4096 verification failed");
     }
 }
