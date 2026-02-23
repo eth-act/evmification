@@ -4,12 +4,21 @@ pragma solidity ^0.8.0;
 import {Test} from "forge-std/Test.sol";
 import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
 import {ModexpBarrett} from "../src/ModexpBarrett.sol";
+import {Modexp} from "../src/Modexp.sol";
 
 contract BarrettVectorRunner {
     function run(bytes calldata base, bytes calldata exponent, bytes calldata modulus)
         external view returns (bytes memory)
     {
         return ModexpBarrett.modexp(base, exponent, modulus);
+    }
+}
+
+contract ModexpVectorRunner {
+    function run(bytes calldata base, bytes calldata exponent, bytes calldata modulus)
+        external view returns (bytes memory)
+    {
+        return Modexp.modexp(base, exponent, modulus);
     }
 }
 
@@ -22,10 +31,12 @@ contract ModexpVectorsTest is Test {
         bytes expected;
     }
 
-    BarrettVectorRunner runner;
+    BarrettVectorRunner barrettRunner;
+    ModexpVectorRunner modexpRunner;
 
     function setUp() public {
-        runner = new BarrettVectorRunner();
+        barrettRunner = new BarrettVectorRunner();
+        modexpRunner = new ModexpVectorRunner();
     }
 
     function _loadVectors() internal view returns (Vector[] memory vecs) {
@@ -50,10 +61,18 @@ contract ModexpVectorsTest is Test {
         }
     }
 
-function test_barrett_all_vectors() public view {
+    function test_barrett_all_vectors() public view {
         Vector[] memory vecs = _loadVectors();
         for (uint256 i; i < vecs.length; ++i) {
-            bytes memory result = runner.run(vecs[i].base, vecs[i].exponent, vecs[i].modulus);
+            bytes memory result = barrettRunner.run(vecs[i].base, vecs[i].exponent, vecs[i].modulus);
+            assertEq(result, vecs[i].expected, vecs[i].name);
+        }
+    }
+
+    function test_modexp_all_vectors() public view {
+        Vector[] memory vecs = _loadVectors();
+        for (uint256 i; i < vecs.length; ++i) {
+            bytes memory result = modexpRunner.run(vecs[i].base, vecs[i].exponent, vecs[i].modulus);
             assertEq(result, vecs[i].expected, vecs[i].name);
         }
     }
