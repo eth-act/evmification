@@ -3,7 +3,6 @@ pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
 import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
-import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
 import {ModexpMontgomeryReadable} from "../src/ModexpMontgomeryReadable.sol";
 import {ModexpBarrett} from "../src/ModexpBarrett.sol";
 
@@ -19,16 +18,6 @@ contract ModexpCaller {
 }
 
 contract MontgomeryModexpBenchCaller {
-    function modexp(
-        bytes calldata base,
-        bytes calldata exponent,
-        bytes calldata modulus
-    ) external view returns (bytes memory) {
-        return ModexpMontgomery.modexp(base, exponent, modulus);
-    }
-}
-
-contract ReadableMontgomeryModexpBenchCaller {
     function modexp(
         bytes calldata base,
         bytes calldata exponent,
@@ -51,7 +40,6 @@ contract BarrettModexpBenchCaller {
 contract ModexpBenchmarkTest is Test {
     ModexpCaller caller;
     MontgomeryModexpBenchCaller montgomeryCaller;
-    ReadableMontgomeryModexpBenchCaller readableCaller;
     BarrettModexpBenchCaller barrettCaller;
 
     // Exponent e=65537
@@ -68,7 +56,6 @@ contract ModexpBenchmarkTest is Test {
     function setUp() public {
         caller = new ModexpCaller();
         montgomeryCaller = new MontgomeryModexpBenchCaller();
-        readableCaller = new ReadableMontgomeryModexpBenchCaller();
         barrettCaller = new BarrettModexpBenchCaller();
     }
 
@@ -86,14 +73,6 @@ contract ModexpBenchmarkTest is Test {
 
     function test_modexp_montgomery_4096() public view {
         montgomeryCaller.modexp(BASE_4096, E, N_4096);
-    }
-
-    function test_modexp_readable_2048() public view {
-        readableCaller.modexp(BASE_2048, E, N_2048);
-    }
-
-    function test_modexp_readable_4096() public view {
-        readableCaller.modexp(BASE_4096, E, N_4096);
     }
 
     function test_modexp_barrett_2048() public view {

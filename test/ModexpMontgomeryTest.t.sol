@@ -3,18 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
 import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
-import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
 import {ModexpMontgomeryReadable} from "../src/ModexpMontgomeryReadable.sol";
-
-contract MontgomeryModexpCaller {
-    function modexp(
-        bytes calldata base,
-        bytes calldata exponent,
-        bytes calldata modulus
-    ) external view returns (bytes memory) {
-        return ModexpMontgomery.modexp(base, exponent, modulus);
-    }
-}
 
 contract PrecompileModexpCaller {
     function modexp(
@@ -26,7 +15,7 @@ contract PrecompileModexpCaller {
     }
 }
 
-contract ReadableMontgomeryModexpCaller {
+contract MontgomeryModexpCaller {
     function modexp(
         bytes calldata base,
         bytes calldata exponent,
@@ -38,7 +27,6 @@ contract ReadableMontgomeryModexpCaller {
 
 contract ModexpMontgomeryTest is Test {
     MontgomeryModexpCaller montgomery;
-    ReadableMontgomeryModexpCaller readable;
     PrecompileModexpCaller precompile;
 
     bytes constant E = hex"010001";
@@ -51,7 +39,6 @@ contract ModexpMontgomeryTest is Test {
 
     function setUp() public {
         montgomery = new MontgomeryModexpCaller();
-        readable = new ReadableMontgomeryModexpCaller();
         precompile = new PrecompileModexpCaller();
     }
 
@@ -89,42 +76,6 @@ contract ModexpMontgomeryTest is Test {
         assertEq(actual, expected, "exp=1 mismatch");
     }
 
-    // ── Readable Montgomery tests ─────────────────────────────────────
-
-    function test_readable_matches_precompile_2048() public view {
-        bytes memory expected = precompile.modexp(BASE_2048, E, N_2048);
-        bytes memory actual = readable.modexp(BASE_2048, E, N_2048);
-        assertEq(actual, expected, "Readable 2048 mismatch");
-    }
-
-    function test_readable_matches_precompile_4096() public view {
-        bytes memory expected = precompile.modexp(BASE_4096, E, N_4096);
-        bytes memory actual = readable.modexp(BASE_4096, E, N_4096);
-        assertEq(actual, expected, "Readable 4096 mismatch");
-    }
-
-    function test_readable_base_zero_2048() public view {
-        bytes memory zeroBase = new bytes(256);
-        bytes memory expected = precompile.modexp(zeroBase, E, N_2048);
-        bytes memory actual = readable.modexp(zeroBase, E, N_2048);
-        assertEq(actual, expected, "readable base=0 mismatch");
-    }
-
-    function test_readable_base_one_2048() public view {
-        bytes memory oneBase = new bytes(256);
-        oneBase[255] = 0x01;
-        bytes memory expected = precompile.modexp(oneBase, E, N_2048);
-        bytes memory actual = readable.modexp(oneBase, E, N_2048);
-        assertEq(actual, expected, "readable base=1 mismatch");
-    }
-
-    function test_readable_exp_one_2048() public view {
-        bytes memory expOne = hex"01";
-        bytes memory expected = precompile.modexp(BASE_2048, expOne, N_2048);
-        bytes memory actual = readable.modexp(BASE_2048, expOne, N_2048);
-        assertEq(actual, expected, "readable exp=1 mismatch");
-    }
-
     // ── Fuzz tests ───────────────────────────────────────────────────────
 
     function testFuzz_montgomery_uint256(uint256 base, uint256 exp, uint256 mod) public view {
@@ -137,16 +88,6 @@ contract ModexpMontgomeryTest is Test {
         assertEq(actual, expected, "Fuzz montgomery uint256 mismatch");
     }
 
-    function testFuzz_readable_uint256(uint256 base, uint256 exp, uint256 mod) public view {
-        vm.assume(mod > 1 && mod % 2 == 1);
-        bytes memory b = abi.encodePacked(base);
-        bytes memory e = abi.encodePacked(exp);
-        bytes memory m = abi.encodePacked(mod);
-        bytes memory expected = precompile.modexp(b, e, m);
-        bytes memory actual = readable.modexp(b, e, m);
-        assertEq(actual, expected, "Fuzz readable uint256 mismatch");
-    }
-
     function testFuzz_montgomery_bytes(bytes memory base, bytes memory exp, bytes memory mod) public view {
         vm.assume(mod.length >= 1 && mod.length <= 64);
         vm.assume(base.length <= 64 && exp.length <= 64);
@@ -155,16 +96,6 @@ contract ModexpMontgomeryTest is Test {
         bytes memory expected = precompile.modexp(base, exp, mod);
         bytes memory actual = montgomery.modexp(base, exp, mod);
         assertEq(actual, expected, "Fuzz montgomery bytes mismatch");
-    }
-
-    function testFuzz_readable_bytes(bytes memory base, bytes memory exp, bytes memory mod) public view {
-        vm.assume(mod.length >= 1 && mod.length <= 64);
-        vm.assume(base.length <= 64 && exp.length <= 64);
-        mod[mod.length - 1] |= 0x01;
-        vm.assume(!_isOne(mod));
-        bytes memory expected = precompile.modexp(base, exp, mod);
-        bytes memory actual = readable.modexp(base, exp, mod);
-        assertEq(actual, expected, "Fuzz readable bytes mismatch");
     }
 
     // ── Targeted edge-case fuzz tests ────────────────────────────────
@@ -176,7 +107,6 @@ contract ModexpMontgomeryTest is Test {
         bytes memory m = abi.encodePacked(mod);
         bytes memory expected = precompile.modexp(b, e, m);
         assertEq(montgomery.modexp(b, e, m), expected, "montgomery exp=0 mismatch");
-        assertEq(readable.modexp(b, e, m), expected, "readable exp=0 mismatch");
     }
 
     function testFuzz_base_greater_than_mod(uint256 mod) public view {
@@ -187,7 +117,6 @@ contract ModexpMontgomeryTest is Test {
         bytes memory m = abi.encodePacked(mod);
         bytes memory expected = precompile.modexp(b, e, m);
         assertEq(montgomery.modexp(b, e, m), expected, "montgomery base>mod mismatch");
-        assertEq(readable.modexp(b, e, m), expected, "readable base>mod mismatch");
     }
 
     function testFuzz_base_equals_mod(uint256 mod) public view {
@@ -197,7 +126,6 @@ contract ModexpMontgomeryTest is Test {
         bytes memory m = abi.encodePacked(mod);
         bytes memory expected = precompile.modexp(b, e, m);
         assertEq(montgomery.modexp(b, e, m), expected, "montgomery base==mod mismatch");
-        assertEq(readable.modexp(b, e, m), expected, "readable base==mod mismatch");
     }
 
     function testFuzz_modulus_with_leading_zero_bytes(uint8 leadingZeros, uint128 modRaw) public view {
@@ -212,7 +140,6 @@ contract ModexpMontgomeryTest is Test {
         bytes memory e = hex"010001";
         bytes memory expected = precompile.modexp(b, e, mod);
         assertEq(montgomery.modexp(b, e, mod), expected, "montgomery leading-zeros mismatch");
-        assertEq(readable.modexp(b, e, mod), expected, "readable leading-zeros mismatch");
     }
 
     function _isOne(bytes memory v) internal pure returns (bool) {
