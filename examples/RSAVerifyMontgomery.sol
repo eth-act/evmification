@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ModexpPrecompile} from "./ModexpPrecompile.sol";
+import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
 
-/// @title RSAVerify
-/// @notice PKCS#1 v1.5 SHA-256 RSA signature verification.
-library RSAVerify {
+/// @title RSAVerifyMontgomery
+/// @notice PKCS#1 v1.5 SHA-256 RSA signature verification using readable Montgomery modexp.
+library RSAVerifyMontgomery {
     /// @notice Verifies an RSA PKCS#1 v1.5 SHA-256 signature.
     /// @param modulus RSA public key modulus (n), big-endian.
     /// @param exponent RSA public key exponent (e), big-endian.
@@ -19,14 +19,13 @@ library RSAVerify {
         bytes memory signature
     ) internal view returns (bool valid) {
         // Step 1: Recover the padded hash via modexp: signature^e mod n
-        bytes memory em = ModexpPrecompile.modexp(signature, exponent, modulus);
+        bytes memory em = ModexpMontgomery.modexp(signature, exponent, modulus);
         uint256 emLen = em.length;
 
         // Step 2: Verify PKCS#1 v1.5 encoding
         // Format: 0x00 || 0x01 || PS (0xFF bytes) || 0x00 || DigestInfo || Hash
 
         // em must be at least: 2 (0x00 0x01) + 8 (min PS) + 1 (0x00) + DigestInfo + 32 (hash)
-        // Shortest DigestInfo is 0x2F variant (offset=0x32), so min = 11 + 0x32 = 61
         if (emLen < 0x3D) return false;
 
         // Determine DigestInfo variant by checking the sequence length byte

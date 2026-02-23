@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Modexp} from "./Modexp.sol";
+import {ModexpBarrett} from "../src/ModexpBarrett.sol";
 
-/// @title RSAVerifyPure
-/// @notice PKCS#1 v1.5 SHA-256 RSA signature verification without the modexp precompile.
-/// @dev Uses Montgomery for odd moduli, Barrett for even moduli.
-library RSAVerifyPure {
+/// @title RSAVerifyBarrett
+/// @notice PKCS#1 v1.5 SHA-256 RSA signature verification using Barrett modexp.
+library RSAVerifyBarrett {
     /// @notice Verifies an RSA PKCS#1 v1.5 SHA-256 signature.
     /// @param modulus RSA public key modulus (n), big-endian.
     /// @param exponent RSA public key exponent (e), big-endian.
@@ -20,7 +19,7 @@ library RSAVerifyPure {
         bytes memory signature
     ) internal view returns (bool valid) {
         // Step 1: Recover the padded hash via modexp: signature^e mod n
-        bytes memory em = Modexp.modexp(signature, exponent, modulus);
+        bytes memory em = ModexpBarrett.modexp(signature, exponent, modulus);
         uint256 emLen = em.length;
 
         // Step 2: Verify PKCS#1 v1.5 encoding

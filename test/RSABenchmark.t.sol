@@ -2,10 +2,10 @@
 pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
-import {RSAVerify} from "../src/RSAVerify.sol";
-import {RSAVerifyMontgomery} from "../src/RSAVerifyMontgomery.sol";
-import {RSAVerifyBarrett} from "../src/RSAVerifyBarrett.sol";
-import {RSAVerifyPure} from "../src/RSAVerifyPure.sol";
+import {RSAVerify} from "../examples/RSAVerify.sol";
+import {RSAVerifyMontgomery} from "../examples/RSAVerifyMontgomery.sol";
+import {RSAVerifyBarrett} from "../examples/RSAVerifyBarrett.sol";
+import {RSAVerifyPure} from "../examples/RSAVerifyPure.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
 /// @notice Thin wrapper to make library calls external for gas measurement.
