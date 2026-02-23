@@ -6,6 +6,9 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
 ]
 via_ir = true  # Needed for ModexpMontgomery (Solidity-heavy code)
-fs_permissions = [{ access = "read", path = "test/modexp/fixtures" }]
+fs_permissions = [
+    { access = "read", path = "test/modexp/fixtures" },
+    { access = "read", path = "test/blake2f/fixtures" },
+]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
