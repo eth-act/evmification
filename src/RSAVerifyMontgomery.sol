@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ModexpMontgomeryReadable} from "./ModexpMontgomeryReadable.sol";
+import {ModexpMontgomery} from "./ModexpMontgomery.sol";
 
-/// @title RSAVerifyMontgomeryReadable
+/// @title RSAVerifyMontgomery
 /// @notice PKCS#1 v1.5 SHA-256 RSA signature verification using readable Montgomery modexp.
-library RSAVerifyMontgomeryReadable {
+library RSAVerifyMontgomery {
     /// @notice Verifies an RSA PKCS#1 v1.5 SHA-256 signature.
     /// @param modulus RSA public key modulus (n), big-endian.
     /// @param exponent RSA public key exponent (e), big-endian.
@@ -19,7 +19,7 @@ library RSAVerifyMontgomeryReadable {
         bytes memory signature
     ) internal view returns (bool valid) {
         // Step 1: Recover the padded hash via modexp: signature^e mod n
-        bytes memory em = ModexpMontgomeryReadable.modexp(signature, exponent, modulus);
+        bytes memory em = ModexpMontgomery.modexp(signature, exponent, modulus);
         uint256 emLen = em.length;
 
         // Step 2: Verify PKCS#1 v1.5 encoding

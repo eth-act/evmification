@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-/// @title ModexpMontgomeryReadable
-/// @notice Readable Montgomery modular exponentiation.
-/// @dev Prioritizes readability: Solidity for control flow, assembly only for the CIOS hot path.
+/// @title ModexpMontgomery
+/// @notice Montgomery modular exponentiation.
+/// @dev Solidity for control flow, assembly for the CIOS hot path.
 ///      May require `via_ir = true` in the compiler settings.
-///      For the gas-optimized version, see ModexpMontgomery.sol.
-library ModexpMontgomeryReadable {
+library ModexpMontgomery {
     /// @notice Computes base^exp mod modulus using Montgomery multiplication.
     /// @param base The base value (big-endian bytes).
     /// @param exponent The exponent value (big-endian bytes).

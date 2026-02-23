@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
 import {RSAVerify} from "../src/RSAVerify.sol";
-import {RSAVerifyMontgomeryReadable} from "../src/RSAVerifyMontgomeryReadable.sol";
+import {RSAVerifyMontgomery} from "../src/RSAVerifyMontgomery.sol";
 import {RSAVerifyBarrett} from "../src/RSAVerifyBarrett.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
@@ -27,7 +27,7 @@ contract RSAVerifyMontgomeryCaller {
         bytes calldata message,
         bytes calldata signature
     ) external view returns (bool) {
-        return RSAVerifyMontgomeryReadable.verify(modulus, exponent, message, signature);
+        return RSAVerifyMontgomery.verify(modulus, exponent, message, signature);
     }
 }
 

@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
 import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
-import {ModexpMontgomeryReadable} from "../src/ModexpMontgomeryReadable.sol";
+import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
 
 contract PrecompileModexpCaller {
     function modexp(
@@ -21,7 +21,7 @@ contract MontgomeryModexpCaller {
         bytes calldata exponent,
         bytes calldata modulus
     ) external view returns (bytes memory) {
-        return ModexpMontgomeryReadable.modexp(base, exponent, modulus);
+        return ModexpMontgomery.modexp(base, exponent, modulus);
     }
 }
 
