@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
+import {ModexpMontgomery} from "../../src/modexp/ModexpMontgomery.sol";
 
 /// @title RSAVerifyMontgomery
 /// @notice PKCS#1 v1.5 SHA-256 RSA signature verification using readable Montgomery modexp.

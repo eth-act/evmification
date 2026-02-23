@@ -2,8 +2,8 @@
 pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
-import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
-import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
+import {ModexpPrecompile} from "../../src/modexp/ModexpPrecompile.sol";
+import {ModexpMontgomery} from "../../src/modexp/ModexpMontgomery.sol";
 
 contract PrecompileModexpCaller {
     function modexp(

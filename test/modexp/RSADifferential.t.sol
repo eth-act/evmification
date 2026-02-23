@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
-import {RSAVerify} from "../examples/RSAVerify.sol";
+import {RSAVerify} from "../../examples/modexp/RSAVerify.sol";
 import {RSA} from "@openzeppelin/contracts/utils/cryptography/RSA.sol";
 
 contract RSADifferentialTest is Test {

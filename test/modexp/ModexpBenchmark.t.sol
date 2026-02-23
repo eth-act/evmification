@@ -2,9 +2,9 @@
 pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
-import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
-import {ModexpMontgomery} from "../src/ModexpMontgomery.sol";
-import {ModexpBarrett} from "../src/ModexpBarrett.sol";
+import {ModexpPrecompile} from "../../src/modexp/ModexpPrecompile.sol";
+import {ModexpMontgomery} from "../../src/modexp/ModexpMontgomery.sol";
+import {ModexpBarrett} from "../../src/modexp/ModexpBarrett.sol";
 
 /// @notice Thin wrapper to make library calls external for gas measurement.
 contract ModexpCaller {

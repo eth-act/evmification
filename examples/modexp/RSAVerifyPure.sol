@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Modexp} from "../src/Modexp.sol";
+import {Modexp} from "../../src/modexp/Modexp.sol";
 
 /// @title RSAVerifyPure
 /// @notice PKCS#1 v1.5 SHA-256 RSA signature verification without the modexp precompile.

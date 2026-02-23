@@ -2,9 +2,9 @@
 pragma solidity ^0.8.0;
 
 import {Test} from "forge-std/Test.sol";
-import {ModexpPrecompile} from "../src/ModexpPrecompile.sol";
-import {ModexpBarrett} from "../src/ModexpBarrett.sol";
-import {Modexp} from "../src/Modexp.sol";
+import {ModexpPrecompile} from "../../src/modexp/ModexpPrecompile.sol";
+import {ModexpBarrett} from "../../src/modexp/ModexpBarrett.sol";
+import {Modexp} from "../../src/modexp/Modexp.sol";
 
 contract BarrettVectorRunner {
     function run(bytes calldata base, bytes calldata exponent, bytes calldata modulus)
@@ -40,7 +40,7 @@ contract ModexpVectorsTest is Test {
     }
 
     function _loadVectors() internal view returns (Vector[] memory vecs) {
-        string memory json = vm.readFile("test/fixtures/modexp_vectors.json");
+        string memory json = vm.readFile("test/modexp/fixtures/modexp_vectors.json");
         uint256 n = vm.parseJsonUint(json, "$.count");
         vecs = new Vector[](n);
         for (uint256 i; i < n; ++i) {

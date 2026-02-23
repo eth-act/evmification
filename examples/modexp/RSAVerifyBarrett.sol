@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ModexpBarrett} from "../src/ModexpBarrett.sol";
+import {ModexpBarrett} from "../../src/modexp/ModexpBarrett.sol";
 
 /// @title RSAVerifyBarrett
 /// @notice PKCS#1 v1.5 SHA-256 RSA signature verification using Barrett modexp.
