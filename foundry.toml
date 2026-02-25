@@ -12,4 +12,7 @@ fs_permissions = [
     { access = "read", path = "test/blake2f/fixtures" },
 ]
 
+[profile.benchmark]
+test = "benchmark"
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

@@ -21,7 +21,7 @@ jobs:
       - name: Run gas snapshot diff
         id: snapshot
         run: |
-          OUTPUT=$(forge snapshot --diff .gas-snapshot 2>&1) || true
+          OUTPUT=$(FOUNDRY_PROFILE=benchmark forge snapshot --diff .gas-snapshot 2>&1) || true
           echo "$OUTPUT"
           DIFF=$(echo "$OUTPUT" | grep -E '^[━↑↓]|^Total tests:|^Overall gas')
           {
