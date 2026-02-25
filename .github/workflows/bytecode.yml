@@ -1,0 +1,51 @@
+name: Bytecode Artifacts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bytecode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Build
+        run: forge build
+
+      - name: Extract deployed bytecode
+        run: |
+          mkdir -p artifacts
+          for contract in \
+            Blake2fDeployed \
+            Sha256Deployed \
+            Ripemd160Deployed \
+            IdentityDeployed \
+            ModexpDeployed \
+            PointEvalDeployed
+          do
+            json=$(find out -path "*/${contract}.sol/${contract}.json" -print -quit)
+            if [ -n "$json" ]; then
+              # Runtime bytecode (what lives on-chain after deployment)
+              jq -r '.deployedBytecode.object' "$json" > "artifacts/${contract}.bin"
+              # Init bytecode (used to deploy)
+              jq -r '.bytecode.object' "$json" > "artifacts/${contract}.init.bin"
+              # ABI
+              jq '.abi' "$json" > "artifacts/${contract}.abi.json"
+              echo "${contract}: $(wc -c < "artifacts/${contract}.bin") bytes runtime"
+            else
+              echo "WARNING: ${contract} artifact not found"
+            fi
+          done
+
+      - name: Upload bytecode artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-bytecode
+          path: artifacts/
