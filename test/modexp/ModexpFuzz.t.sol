@@ -119,14 +119,17 @@ contract ModexpFuzzTest is Test {
         bytes calldata mod_
     ) public view {
         // Bound to avoid gas explosion: mod <= 128 bytes, exp <= 32 bytes
-        vm.assume(mod_.length > 0 && mod_.length <= 128);
-        vm.assume(exp.length <= 32);
-        vm.assume(base.length <= 128);
-        // Skip zero modulus (trivial)
-        vm.assume(uint8(mod_[0]) != 0 || mod_.length == 1);
+        // Truncate inputs instead of vm.assume to avoid rejection limit at high run counts
+        vm.assume(mod_.length > 0);
+        uint256 modLen = mod_.length > 128 ? 128 : mod_.length;
+        bytes memory mod__ = mod_[0:modLen];
+        uint256 expLen = exp.length > 32 ? 32 : exp.length;
+        bytes memory exp__ = exp[0:expLen];
+        uint256 baseLen = base.length > 128 ? 128 : base.length;
+        bytes memory base__ = base[0:baseLen];
 
-        bytes memory expected = _evmModexp(base, exp, mod_);
-        bytes memory actual = modexpRunner.run(base, exp, mod_);
+        bytes memory expected = _evmModexp(base__, exp__, mod__);
+        bytes memory actual = modexpRunner.run(base__, exp__, mod__);
         assertEq(actual, expected, "general fuzz mismatch");
     }
 

@@ -19,6 +19,25 @@ library ModexpBarrett {
         result = new bytes(modLen);
         if (_isZeroBytes(modulus) || _isOneBytes(modulus)) return result;
 
+        // Strip leading zero bytes so k reflects the actual modulus size.
+        // Barrett requires that the top limb of n is non-zero.
+        uint256 effectiveStart = 0;
+        while (effectiveStart < modLen - 1 && modulus[effectiveStart] == 0) {
+            effectiveStart++;
+        }
+        if (effectiveStart > 0) {
+            uint256 effectiveModLen = modLen - effectiveStart;
+            bytes memory trimmedMod = new bytes(effectiveModLen);
+            for (uint256 i = 0; i < effectiveModLen; i++) {
+                trimmedMod[i] = modulus[effectiveStart + i];
+            }
+            bytes memory trimmedResult = ModexpBarrett.modexp(base, exponent, trimmedMod);
+            for (uint256 i = 0; i < effectiveModLen; i++) {
+                result[effectiveStart + i] = trimmedResult[i];
+            }
+            return result;
+        }
+
         uint256 k = (modLen + 31) / 32;
 
         uint256[] memory n = _bytesToLimbs(modulus, k);
