@@ -149,7 +149,7 @@ library ModexpBarrett {
 
     // ── Barrett constant computation ──────────────────────────────────
 
-    /// @dev Computes mu = floor(2^(512k) / n). Returns a (k+1)-limb array.
+    /// @dev Computes mu = floor(2^(512k) / n).
     function _computeBarrettConstant(uint256[] memory n, uint256 k, bytes memory modulus)
         private view returns (uint256[] memory)
     {
@@ -235,7 +235,7 @@ library ModexpBarrett {
     }
 
     /// @dev Schoolbook long division: dividend[0..dLen-1] / divisor[0..k-1].
-    ///      All arrays are little-endian limbs. Returns quotient with k+1 limbs.
+    ///      All arrays are little-endian limbs.
     function _schoolbookDiv(
         uint256[] memory dividend,
         uint256 dLen,
@@ -248,7 +248,7 @@ library ModexpBarrett {
             m--;
         }
         if (m == 0) {
-            quotient = new uint256[](k + 1);
+            quotient = new uint256[](1);
             return quotient;
         }
 
@@ -261,24 +261,24 @@ library ModexpBarrett {
         // Single-limb effective divisor: use simple division
         if (kEff == 1) {
             uint256 d = divisor[0];
-            quotient = new uint256[](k + 1);
+            quotient = new uint256[](m);
             uint256 remainder = 0;
             for (uint256 i = m; i > 0;) {
                 unchecked { i--; }
                 uint256 q;
                 (q, remainder) = _div512by256(remainder, dividend[i], d);
-                if (i < k + 1) {
-                    quotient[i] = q;
-                }
+                quotient[i] = q;
             }
             return quotient;
         }
 
         // Multi-limb divisor: Knuth Algorithm D (using kEff significant limbs)
-        uint256 qLen = k + 1;
-        quotient = new uint256[](qLen);
-
-        if (m < kEff) return quotient;
+        if (m < kEff) {
+            quotient = new uint256[](1);
+            return quotient;
+        }
+        uint256 numQlimbs = m - kEff + 1;
+        quotient = new uint256[](numQlimbs);
 
         uint256[] memory u = new uint256[](m + 1);
         for (uint256 i = 0; i < m; i++) {
@@ -319,7 +319,6 @@ library ModexpBarrett {
 
         uint256 vTop = v[kEff - 1];
 
-        uint256 numQlimbs = m - kEff + 1;
         for (uint256 jj = numQlimbs; jj > 0;) {
             unchecked { jj--; }
             uint256 uHi = u[jj + kEff];
@@ -416,9 +415,7 @@ library ModexpBarrett {
                 }
             }
 
-            if (jj < qLen) {
-                quotient[jj] = qHat;
-            }
+            quotient[jj] = qHat;
         }
 
         return quotient;
@@ -470,7 +467,7 @@ library ModexpBarrett {
     // ── Barrett multiply-reduce ───────────────────────────────────────
 
     /// @dev Computes (a * b) mod n using Barrett reduction.
-    ///      a, b are k limbs; n is k limbs; mu is k+1 limbs.
+    ///      a, b are k limbs; n is k limbs.
     function _barrettMulMod(
         uint256[] memory a,
         uint256[] memory b,
@@ -492,15 +489,16 @@ library ModexpBarrett {
         }
 
         // Step 3: q2 = q1 * mu
-        uint256 muLen = k + 1;
+        uint256 muLen = mu.length;
         uint256[] memory q2 = _schoolbookMul(q1, q1Len, mu, muLen);
 
         // Step 4: q3 = q2 >> (256*(k+1)) — estimated quotient
-        uint256 q3Len = k + 2;
+        uint256 q2Len = q1Len + muLen;
+        uint256 q3Len = q2Len > k + 1 ? q2Len - (k + 1) : 1;
         uint256[] memory q3 = new uint256[](q3Len);
         for (uint256 i = 0; i < q3Len; i++) {
             uint256 srcIdx = i + k + 1;
-            if (srcIdx < q1Len + muLen) {
+            if (srcIdx < q2Len) {
                 q3[i] = q2[srcIdx];
             }
         }
