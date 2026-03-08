@@ -21,19 +21,24 @@ library ModexpBarrett {
 
         // Strip leading zero bytes so k reflects the actual modulus size.
         // Barrett requires that the top limb of n is non-zero.
-        uint256 effectiveStart = 0;
-        while (effectiveStart < modLen - 1 && modulus[effectiveStart] == 0) {
-            effectiveStart++;
+        uint256 effectiveStart;
+        assembly {
+            let ptr := add(modulus, 0x20)
+            let end := add(ptr, sub(modLen, 1))
+            for {} and(lt(ptr, end), iszero(byte(0, mload(ptr)))) {} {
+                ptr := add(ptr, 1)
+            }
+            effectiveStart := sub(ptr, add(modulus, 0x20))
         }
         if (effectiveStart > 0) {
             uint256 effectiveModLen = modLen - effectiveStart;
             bytes memory trimmedMod = new bytes(effectiveModLen);
-            for (uint256 i = 0; i < effectiveModLen; i++) {
-                trimmedMod[i] = modulus[effectiveStart + i];
+            assembly {
+                mcopy(add(trimmedMod, 0x20), add(add(modulus, 0x20), effectiveStart), effectiveModLen)
             }
             bytes memory trimmedResult = ModexpBarrett.modexp(base, exponent, trimmedMod);
-            for (uint256 i = 0; i < effectiveModLen; i++) {
-                result[effectiveStart + i] = trimmedResult[i];
+            assembly {
+                mcopy(add(add(result, 0x20), effectiveStart), add(trimmedResult, 0x20), effectiveModLen)
             }
             return result;
         }
@@ -58,19 +63,32 @@ library ModexpBarrett {
 
     // ── Byte-level helpers ────────────────────────────────────────────
 
-    function _isZeroBytes(bytes memory b) private pure returns (bool) {
-        for (uint256 i = 0; i < b.length; i++) {
-            if (b[i] != 0) return false;
+    function _isZeroBytes(bytes memory b) private pure returns (bool z) {
+        assembly {
+            let len := mload(b)
+            let ptr := add(b, 0x20)
+            let end := add(ptr, len)
+            z := 1
+            for {} lt(ptr, end) { ptr := add(ptr, 0x20) } {
+                if mload(ptr) { z := 0 ptr := end }
+            }
         }
-        return true;
     }
 
-    function _isOneBytes(bytes memory b) private pure returns (bool) {
-        uint256 len = b.length;
-        for (uint256 i = 0; i < len - 1; i++) {
-            if (b[i] != 0) return false;
+    function _isOneBytes(bytes memory b) private pure returns (bool z) {
+        assembly {
+            let len := mload(b)
+            let ptr := add(b, 0x20)
+            // Check all bytes except the last are zero (word-at-a-time for prefix)
+            let prefixLen := sub(len, 1)
+            let end := add(ptr, prefixLen)
+            z := 1
+            for {} lt(ptr, end) { ptr := add(ptr, 0x20) } {
+                if mload(ptr) { z := 0 ptr := end }
+            }
+            // Check last byte is 0x01
+            if z { z := eq(byte(0, mload(add(add(b, 0x20), prefixLen))), 0x01) }
         }
-        return b[len - 1] == 0x01;
     }
 
     // ── Limb conversion ──────────────────────────────────────────────
@@ -175,8 +193,7 @@ library ModexpBarrett {
         // r = 2^(512k) mod n via precompile
         uint256 expVal = 512 * k;
         bytes memory expBytes = _uint256ToMinBytes(expVal);
-        bytes memory base2 = new bytes(1);
-        base2[0] = 0x02;
+        bytes memory base2 = hex"02";
         uint256[] memory r = _bytesToLimbs(_callPrecompile(base2, expBytes, modulus), k);
 
         // dividend = 2^(512k) - r, which is exactly divisible by n
@@ -300,8 +317,8 @@ library ModexpBarrett {
         quotient = new uint256[](numQlimbs);
 
         uint256[] memory u = new uint256[](m + 1);
-        for (uint256 i = 0; i < m; i++) {
-            u[i] = dividend[i];
+        assembly {
+            mcopy(add(u, 0x20), add(dividend, 0x20), mul(m, 0x20))
         }
 
         // Normalize: shift divisor so top limb has high bit set
@@ -331,8 +348,8 @@ library ModexpBarrett {
             }
             u[m] = carry;
         } else {
-            for (uint256 i = 0; i < kEff; i++) {
-                v[i] = divisor[i];
+            assembly {
+                mcopy(add(v, 0x20), add(divisor, 0x20), mul(kEff, 0x20))
             }
         }
 
@@ -500,10 +517,15 @@ library ModexpBarrett {
         // Step 2: q1 = product >> (256*(k-1)) — top k+2 limbs
         uint256 q1Len = k + 2;
         uint256[] memory q1 = new uint256[](q1Len);
-        for (uint256 i = 0; i < q1Len; i++) {
-            uint256 srcIdx = i + k - 1;
-            if (srcIdx < 2 * k) {
-                q1[i] = product[srcIdx];
+        {
+            // Copy min(q1Len, 2k - (k-1)) = min(k+2, k+1) = k+1 limbs from product[k-1..]
+            uint256 copyLen = k + 1;
+            assembly {
+                mcopy(
+                    add(q1, 0x20),
+                    add(add(product, 0x20), mul(sub(k, 1), 0x20)),
+                    mul(copyLen, 0x20)
+                )
             }
         }
 
@@ -515,10 +537,15 @@ library ModexpBarrett {
         uint256 q2Len = q1Len + muLen;
         uint256 q3Len = q2Len > k + 1 ? q2Len - (k + 1) : 1;
         uint256[] memory q3 = new uint256[](q3Len);
-        for (uint256 i = 0; i < q3Len; i++) {
-            uint256 srcIdx = i + k + 1;
-            if (srcIdx < q2Len) {
-                q3[i] = q2[srcIdx];
+        {
+            uint256 copyLen = q2Len > k + 1 ? q2Len - (k + 1) : 0;
+            if (copyLen > q3Len) copyLen = q3Len;
+            assembly {
+                mcopy(
+                    add(q3, 0x20),
+                    add(add(q2, 0x20), mul(add(k, 1), 0x20)),
+                    mul(copyLen, 0x20)
+                )
             }
         }
 
@@ -561,7 +588,6 @@ library ModexpBarrett {
             }
         }
 
-        // Debug: log intermediate values
         // Step 7: r = r1 - r2 (mod 2^(256*(k+1))), then correct
         result = new uint256[](k);
         assembly {
@@ -599,9 +625,7 @@ library ModexpBarrett {
                 }
 
                 if iszero(geq) {
-                    for { let i := 0 } lt(i, k) { i := add(i, 1) } {
-                        mstore(add(resP, mul(i, 0x20)), mload(add(r2P, mul(i, 0x20))))
-                    }
+                    mcopy(resP, r2P, mul(k, 0x20))
                     iter := 3
                 }
                 if gt(geq, 0) {
@@ -648,26 +672,20 @@ library ModexpBarrett {
         uint256 freeMemBase;
         assembly { freeMemBase := mload(0x40) }
 
+        // Find the top set bit in the first non-zero byte
         uint8 b = uint8(exponent[startByte]);
         uint256 topBit = 7;
         while (topBit > 0 && (b >> topBit) & 1 == 0) {
             topBit--;
         }
 
-        for (uint256 bit = topBit;;) {
-            assembly { mstore(0x40, freeMemBase) }
-            _copyLimbs(_barrettMulMod(r, r, n, mu, k), r, k);
-            if ((b >> bit) & 1 == 1) {
-                assembly { mstore(0x40, freeMemBase) }
-                _copyLimbs(_barrettMulMod(r, a, n, mu, k), r, k);
-            }
-            if (bit == 0) break;
-            unchecked { bit--; }
-        }
-
-        for (uint256 byteIdx = startByte + 1; byteIdx < expLen; byteIdx++) {
+        // Unified square-and-multiply loop across all exponent bytes
+        bool started = false;
+        for (uint256 byteIdx = startByte; byteIdx < expLen; byteIdx++) {
             b = uint8(exponent[byteIdx]);
-            for (uint256 bit = 8; bit > 0;) {
+            uint256 highBit = started ? 7 : topBit;
+            started = true;
+            for (uint256 bit = highBit + 1; bit > 0;) {
                 unchecked { bit--; }
                 assembly { mstore(0x40, freeMemBase) }
                 _copyLimbs(_barrettMulMod(r, r, n, mu, k), r, k);
@@ -684,11 +702,7 @@ library ModexpBarrett {
     /// @dev Copy `len` limbs from `src` into `dst` (in-place overwrite).
     function _copyLimbs(uint256[] memory src, uint256[] memory dst, uint256 len) private pure {
         assembly {
-            let s := add(src, 0x20)
-            let d := add(dst, 0x20)
-            for { let i := 0 } lt(i, len) { i := add(i, 1) } {
-                mstore(add(d, mul(i, 0x20)), mload(add(s, mul(i, 0x20))))
-            }
+            mcopy(add(dst, 0x20), add(src, 0x20), mul(len, 0x20))
         }
     }
 }
