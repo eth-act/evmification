@@ -55,42 +55,7 @@ library Sha256 {
                 r := and(or(shr(n, x), shl(sub(32, n), x)), 0xffffffff)
             }
 
-            // One round of SHA-256 compression, state in memory at stPtr (8 words, 32-byte stride)
-            // wPtr is message schedule, t is round index
-            function sha256Round(stPtr, wPtr, t) {
-                let M32 := 0xffffffff
-                let a := mload(stPtr)
-                let b := mload(add(stPtr, 0x20))
-                let c := mload(add(stPtr, 0x40))
-                let d := mload(add(stPtr, 0x60))
-                let e := mload(add(stPtr, 0x80))
-                let f := mload(add(stPtr, 0xa0))
-                let g := mload(add(stPtr, 0xc0))
-                let hh := mload(add(stPtr, 0xe0))
-
-                // Sigma1(e) = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25)
-                let s1 := and(xor(xor(rotr32(e, 6), rotr32(e, 11)), rotr32(e, 25)), M32)
-                // Ch(e,f,g) = (e & f) ^ (~e & g)
-                let ch := and(xor(and(e, f), and(not(e), g)), M32)
-                let wt := mload(add(wPtr, mul(t, 0x20)))
-                let t1 := and(add(add(add(add(hh, s1), ch), getK(t)), wt), M32)
-
-                // Sigma0(a) = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22)
-                let s0 := and(xor(xor(rotr32(a, 2), rotr32(a, 13)), rotr32(a, 22)), M32)
-                // Maj(a,b,c) = (a & b) ^ (a & c) ^ (b & c)
-                let mj := and(xor(xor(and(a, b), and(a, c)), and(b, c)), M32)
-                let t2 := and(add(s0, mj), M32)
-
-                // Shift: h=g, g=f, f=e, e=d+t1, d=c, c=b, b=a, a=t1+t2
-                mstore(add(stPtr, 0xe0), g)
-                mstore(add(stPtr, 0xc0), f)
-                mstore(add(stPtr, 0xa0), e)
-                mstore(add(stPtr, 0x80), and(add(d, t1), M32))
-                mstore(add(stPtr, 0x60), c)
-                mstore(add(stPtr, 0x40), b)
-                mstore(add(stPtr, 0x20), a)
-                mstore(stPtr, and(add(t1, t2), M32))
-            }
+            // sha256Round is inlined below to avoid memory load/store per round
 
             // ── Padding ──────────────────────────────────────────
             let dataLen := mload(data)
@@ -115,10 +80,9 @@ library Sha256 {
             // 64-bit big-endian bit length at end
             mstore(add(padBuf, sub(paddedLen, 8)), shl(192, bitLen))
 
-            // ── Allocate hash state H[0..7] and working state in memory ──
+            // ── Allocate hash state H[0..7] and message schedule in memory ──
             let hPtr := mload(0x40)              // 8 words * 32 bytes = 256 bytes
-            let stPtr := add(hPtr, 256)           // 8 words * 32 bytes = 256 bytes (working vars)
-            let wPtr := add(stPtr, 256)           // 64 words * 32 bytes = 2048 bytes
+            let wPtr := add(hPtr, 256)            // 64 words * 32 bytes = 2048 bytes
             mstore(0x40, add(wPtr, 2048))
 
             // Initialize H[0..7]
@@ -160,22 +124,46 @@ library Sha256 {
                         and(add(add(add(smallSigma1(wt2), wt7), smallSigma0(wt15)), wt16), MASK32))
                 }
 
-                // Copy H -> working state
-                for { let k := 0 } lt(k, 8) { k := add(k, 1) } {
-                    mstore(add(stPtr, mul(k, 0x20)), mload(add(hPtr, mul(k, 0x20))))
-                }
+                // Initialize working state from H
+                let a := mload(hPtr)
+                let b := mload(add(hPtr, 0x20))
+                let c := mload(add(hPtr, 0x40))
+                let dd := mload(add(hPtr, 0x60))
+                let e := mload(add(hPtr, 0x80))
+                let ff := mload(add(hPtr, 0xa0))
+                let gg := mload(add(hPtr, 0xc0))
+                let hh := mload(add(hPtr, 0xe0))
 
-                // 64 rounds
+                // 64 rounds — state kept in stack locals
                 for { let t := 0 } lt(t, 64) { t := add(t, 1) } {
-                    sha256Round(stPtr, wPtr, t)
+                    let s1 := and(xor(xor(rotr32(e, 6), rotr32(e, 11)), rotr32(e, 25)), MASK32)
+                    let ch := and(xor(and(e, ff), and(not(e), gg)), MASK32)
+                    let wt := mload(add(wPtr, mul(t, 0x20)))
+                    let t1 := and(add(add(add(add(hh, s1), ch), getK(t)), wt), MASK32)
+
+                    let s0 := and(xor(xor(rotr32(a, 2), rotr32(a, 13)), rotr32(a, 22)), MASK32)
+                    let mj := and(xor(xor(and(a, b), and(a, c)), and(b, c)), MASK32)
+                    let t2 := and(add(s0, mj), MASK32)
+
+                    hh := gg
+                    gg := ff
+                    ff := e
+                    e := and(add(dd, t1), MASK32)
+                    dd := c
+                    c := b
+                    b := a
+                    a := and(add(t1, t2), MASK32)
                 }
 
                 // H[i] += working[i]
-                for { let k := 0 } lt(k, 8) { k := add(k, 1) } {
-                    let off := mul(k, 0x20)
-                    mstore(add(hPtr, off),
-                        and(add(mload(add(hPtr, off)), mload(add(stPtr, off))), MASK32))
-                }
+                mstore(hPtr, and(add(mload(hPtr), a), MASK32))
+                mstore(add(hPtr, 0x20), and(add(mload(add(hPtr, 0x20)), b), MASK32))
+                mstore(add(hPtr, 0x40), and(add(mload(add(hPtr, 0x40)), c), MASK32))
+                mstore(add(hPtr, 0x60), and(add(mload(add(hPtr, 0x60)), dd), MASK32))
+                mstore(add(hPtr, 0x80), and(add(mload(add(hPtr, 0x80)), e), MASK32))
+                mstore(add(hPtr, 0xa0), and(add(mload(add(hPtr, 0xa0)), ff), MASK32))
+                mstore(add(hPtr, 0xc0), and(add(mload(add(hPtr, 0xc0)), gg), MASK32))
+                mstore(add(hPtr, 0xe0), and(add(mload(add(hPtr, 0xe0)), hh), MASK32))
             }
 
             // ── Produce 32-byte result (big-endian) ──────────────

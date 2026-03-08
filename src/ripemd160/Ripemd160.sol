@@ -25,123 +25,54 @@ library Ripemd160 {
                 r := and(or(shl(n, x), shr(sub(32, n), x)), 0xffffffff)
             }
 
-            // ── Left round: computes one step, reads/writes state from memory
-            // stPtr points to 5 words: a, b, c, d, e (32-byte stride)
-            function leftRound(stPtr, xPtr, j) {
-                let M32 := 0xffffffff
-                let a := mload(stPtr)
-                let b := mload(add(stPtr, 0x20))
-                let c := mload(add(stPtr, 0x40))
-                let d := mload(add(stPtr, 0x60))
-                let e := mload(add(stPtr, 0x80))
+            // ── Packed lookup tables ────────────────────────────────
+            // Each row: 16 nibbles packed MSB-first into a uint64.
+            // Extract: value = (row >> (60 - idx*4)) & 0xf
 
-                let group := div(j, 16)
-                let fVal
-                let kl
-                switch group
-                case 0 { fVal := xor(xor(b, c), d) kl := 0x00000000 }
-                case 1 { fVal := or(and(b, c), and(not(b), d)) kl := 0x5a827999 }
-                case 2 { fVal := xor(or(b, not(c)), d) kl := 0x6ed9eba1 }
-                case 3 { fVal := or(and(b, d), and(c, not(d))) kl := 0x8f1bbcdc }
-                case 4 { fVal := xor(b, or(c, not(d))) kl := 0xa953fd4e }
-
-                // word selection rL
-                let ri
-                if lt(j, 16) { ri := j }
-                if and(gt(j, 15), lt(j, 32)) {
-                    // rL[16..31]
-                    let idx := sub(j, 16)
-                    // 7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8
-                    switch idx
-                    case  0 { ri :=  7 } case  1 { ri :=  4 } case  2 { ri := 13 } case  3 { ri :=  1 }
-                    case  4 { ri := 10 } case  5 { ri :=  6 } case  6 { ri := 15 } case  7 { ri :=  3 }
-                    case  8 { ri := 12 } case  9 { ri :=  0 } case 10 { ri :=  9 } case 11 { ri :=  5 }
-                    case 12 { ri :=  2 } case 13 { ri := 14 } case 14 { ri := 11 } case 15 { ri :=  8 }
-                }
-                if and(gt(j, 31), lt(j, 48)) {
-                    let idx := sub(j, 32)
-                    switch idx
-                    case  0 { ri :=  3 } case  1 { ri := 10 } case  2 { ri := 14 } case  3 { ri :=  4 }
-                    case  4 { ri :=  9 } case  5 { ri := 15 } case  6 { ri :=  8 } case  7 { ri :=  1 }
-                    case  8 { ri :=  2 } case  9 { ri :=  7 } case 10 { ri :=  0 } case 11 { ri :=  6 }
-                    case 12 { ri := 13 } case 13 { ri := 11 } case 14 { ri :=  5 } case 15 { ri := 12 }
-                }
-                if and(gt(j, 47), lt(j, 64)) {
-                    let idx := sub(j, 48)
-                    switch idx
-                    case  0 { ri :=  1 } case  1 { ri :=  9 } case  2 { ri := 11 } case  3 { ri := 10 }
-                    case  4 { ri :=  0 } case  5 { ri :=  8 } case  6 { ri := 12 } case  7 { ri :=  4 }
-                    case  8 { ri := 13 } case  9 { ri :=  3 } case 10 { ri :=  7 } case 11 { ri := 15 }
-                    case 12 { ri := 14 } case 13 { ri :=  5 } case 14 { ri :=  6 } case 15 { ri :=  2 }
-                }
-                if gt(j, 63) {
-                    let idx := sub(j, 64)
-                    switch idx
-                    case  0 { ri :=  4 } case  1 { ri :=  0 } case  2 { ri :=  5 } case  3 { ri :=  9 }
-                    case  4 { ri :=  7 } case  5 { ri := 12 } case  6 { ri :=  2 } case  7 { ri := 10 }
-                    case  8 { ri := 14 } case  9 { ri :=  1 } case 10 { ri :=  3 } case 11 { ri :=  8 }
-                    case 12 { ri := 11 } case 13 { ri :=  6 } case 14 { ri := 15 } case 15 { ri := 13 }
-                }
-
-                // rotation amounts sL
-                let si
-                // Encoded as packed bytes per group: 16 rotation amounts each
-                switch group
-                case 0 {
-                    // 11,14,15,12,5,8,7,9,11,13,14,15,6,7,9,8
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si := 11 } case  1 { si := 14 } case  2 { si := 15 } case  3 { si := 12 }
-                    case  4 { si :=  5 } case  5 { si :=  8 } case  6 { si :=  7 } case  7 { si :=  9 }
-                    case  8 { si := 11 } case  9 { si := 13 } case 10 { si := 14 } case 11 { si := 15 }
-                    case 12 { si :=  6 } case 13 { si :=  7 } case 14 { si :=  9 } case 15 { si :=  8 }
-                }
-                case 1 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si :=  7 } case  1 { si :=  6 } case  2 { si :=  8 } case  3 { si := 13 }
-                    case  4 { si := 11 } case  5 { si :=  9 } case  6 { si :=  7 } case  7 { si := 15 }
-                    case  8 { si :=  7 } case  9 { si := 12 } case 10 { si := 15 } case 11 { si :=  9 }
-                    case 12 { si := 11 } case 13 { si :=  7 } case 14 { si := 13 } case 15 { si := 12 }
-                }
-                case 2 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si := 11 } case  1 { si := 13 } case  2 { si :=  6 } case  3 { si :=  7 }
-                    case  4 { si := 14 } case  5 { si :=  9 } case  6 { si := 13 } case  7 { si := 15 }
-                    case  8 { si := 14 } case  9 { si :=  8 } case 10 { si := 13 } case 11 { si :=  6 }
-                    case 12 { si :=  5 } case 13 { si := 12 } case 14 { si :=  7 } case 15 { si :=  5 }
-                }
-                case 3 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si := 11 } case  1 { si := 12 } case  2 { si := 14 } case  3 { si := 15 }
-                    case  4 { si := 14 } case  5 { si := 15 } case  6 { si :=  9 } case  7 { si :=  8 }
-                    case  8 { si :=  9 } case  9 { si := 14 } case 10 { si :=  5 } case 11 { si :=  6 }
-                    case 12 { si :=  8 } case 13 { si :=  6 } case 14 { si :=  5 } case 15 { si := 12 }
-                }
-                case 4 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si :=  9 } case  1 { si := 15 } case  2 { si :=  5 } case  3 { si := 11 }
-                    case  4 { si :=  6 } case  5 { si :=  8 } case  6 { si := 13 } case  7 { si := 12 }
-                    case  8 { si :=  5 } case  9 { si := 12 } case 10 { si := 13 } case 11 { si := 14 }
-                    case 12 { si := 11 } case 13 { si :=  8 } case 14 { si :=  5 } case 15 { si :=  6 }
-                }
-
-                let w := mload(add(xPtr, mul(ri, 0x20)))
-                let tVal := and(add(add(add(a, and(fVal, M32)), w), kl), M32)
-                tVal := and(add(rotl32(tVal, si), e), M32)
-
-                mstore(stPtr, e)                    // a = e
-                mstore(add(stPtr, 0x80), d)         // e = d
-                mstore(add(stPtr, 0x60), rotl32(c, 10)) // d = rotl32(c, 10)
-                mstore(add(stPtr, 0x40), b)         // c = b
-                mstore(add(stPtr, 0x20), tVal)      // b = tVal
+            // Left word selection (rL) per group
+            function wordRowL(g) -> r {
+                switch g
+                case 0 { r := 0x0123456789abcdef }
+                case 1 { r := 0x74d1a6f3c0952eb8 }
+                case 2 { r := 0x3ae49f812706db5c }
+                case 3 { r := 0x19ba08c4d37fe562 }
+                case 4 { r := 0x40597c2ae138b6fd }
+            }
+            // Left rotation amounts (sL) per group
+            function rotRowL(g) -> r {
+                switch g
+                case 0 { r := 0xbefc5879bdef6798 }
+                case 1 { r := 0x768db97f7cf9b7dc }
+                case 2 { r := 0xbd67e9dfe8d65c75 }
+                case 3 { r := 0xbcefef989e56865c }
+                case 4 { r := 0x9f5b68dc5cdeb856 }
+            }
+            // Right word selection (rR) per group
+            function wordRowR(g) -> r {
+                switch g
+                case 0 { r := 0x5e7092b4d6f81a3c }
+                case 1 { r := 0x6b370d5aef8c4912 }
+                case 2 { r := 0xf5137e69b8c2a04d }
+                case 3 { r := 0x86413bf05c2d97ae }
+                case 4 { r := 0xcfa4158762de039b }
+            }
+            // Right rotation amounts (sR) per group
+            function rotRowR(g) -> r {
+                switch g
+                case 0 { r := 0x899bdff5778beec6 }
+                case 1 { r := 0x9df7c89b77c76fdb }
+                case 2 { r := 0x97fb866ecd5edd75 }
+                case 3 { r := 0xf58bee6e69c9c5f8 }
+                case 4 { r := 0x85c9c5e68d65fdbb }
             }
 
-            // ── Right round: same structure but with right-path tables
-            function rightRound(stPtr, xPtr, j) {
+            // Extract nibble at position idx (0-15) from packed row
+            function nibble(row, idx) -> v {
+                v := and(shr(sub(60, mul(idx, 4)), row), 0xf)
+            }
+
+            // ── Unified round function ────────────────────────────
+            function rmdRound(stPtr, xPtr, j, wordRow, rotRow, fVal, kk) {
                 let M32 := 0xffffffff
                 let a := mload(stPtr)
                 let b := mload(add(stPtr, 0x20))
@@ -149,106 +80,12 @@ library Ripemd160 {
                 let d := mload(add(stPtr, 0x60))
                 let e := mload(add(stPtr, 0x80))
 
-                let group := div(j, 16)
-                let fVal
-                let kr
-                switch group
-                case 0 { fVal := xor(b, or(c, not(d))) kr := 0x50a28be6 }
-                case 1 { fVal := or(and(b, d), and(c, not(d))) kr := 0x5c4dd124 }
-                case 2 { fVal := xor(or(b, not(c)), d) kr := 0x6d703ef3 }
-                case 3 { fVal := or(and(b, c), and(not(b), d)) kr := 0x7a6d76e9 }
-                case 4 { fVal := xor(xor(b, c), d) kr := 0x00000000 }
-
-                // word selection rR
-                let ri
-                switch group
-                case 0 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { ri :=  5 } case  1 { ri := 14 } case  2 { ri :=  7 } case  3 { ri :=  0 }
-                    case  4 { ri :=  9 } case  5 { ri :=  2 } case  6 { ri := 11 } case  7 { ri :=  4 }
-                    case  8 { ri := 13 } case  9 { ri :=  6 } case 10 { ri := 15 } case 11 { ri :=  8 }
-                    case 12 { ri :=  1 } case 13 { ri := 10 } case 14 { ri :=  3 } case 15 { ri := 12 }
-                }
-                case 1 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { ri :=  6 } case  1 { ri := 11 } case  2 { ri :=  3 } case  3 { ri :=  7 }
-                    case  4 { ri :=  0 } case  5 { ri := 13 } case  6 { ri :=  5 } case  7 { ri := 10 }
-                    case  8 { ri := 14 } case  9 { ri := 15 } case 10 { ri :=  8 } case 11 { ri := 12 }
-                    case 12 { ri :=  4 } case 13 { ri :=  9 } case 14 { ri :=  1 } case 15 { ri :=  2 }
-                }
-                case 2 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { ri := 15 } case  1 { ri :=  5 } case  2 { ri :=  1 } case  3 { ri :=  3 }
-                    case  4 { ri :=  7 } case  5 { ri := 14 } case  6 { ri :=  6 } case  7 { ri :=  9 }
-                    case  8 { ri := 11 } case  9 { ri :=  8 } case 10 { ri := 12 } case 11 { ri :=  2 }
-                    case 12 { ri := 10 } case 13 { ri :=  0 } case 14 { ri :=  4 } case 15 { ri := 13 }
-                }
-                case 3 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { ri :=  8 } case  1 { ri :=  6 } case  2 { ri :=  4 } case  3 { ri :=  1 }
-                    case  4 { ri :=  3 } case  5 { ri := 11 } case  6 { ri := 15 } case  7 { ri :=  0 }
-                    case  8 { ri :=  5 } case  9 { ri := 12 } case 10 { ri :=  2 } case 11 { ri := 13 }
-                    case 12 { ri :=  9 } case 13 { ri :=  7 } case 14 { ri := 10 } case 15 { ri := 14 }
-                }
-                case 4 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { ri := 12 } case  1 { ri := 15 } case  2 { ri := 10 } case  3 { ri :=  4 }
-                    case  4 { ri :=  1 } case  5 { ri :=  5 } case  6 { ri :=  8 } case  7 { ri :=  7 }
-                    case  8 { ri :=  6 } case  9 { ri :=  2 } case 10 { ri := 13 } case 11 { ri := 14 }
-                    case 12 { ri :=  0 } case 13 { ri :=  3 } case 14 { ri :=  9 } case 15 { ri := 11 }
-                }
-
-                // rotation amounts sR
-                let si
-                switch group
-                case 0 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si :=  8 } case  1 { si :=  9 } case  2 { si :=  9 } case  3 { si := 11 }
-                    case  4 { si := 13 } case  5 { si := 15 } case  6 { si := 15 } case  7 { si :=  5 }
-                    case  8 { si :=  7 } case  9 { si :=  7 } case 10 { si :=  8 } case 11 { si := 11 }
-                    case 12 { si := 14 } case 13 { si := 14 } case 14 { si := 12 } case 15 { si :=  6 }
-                }
-                case 1 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si :=  9 } case  1 { si := 13 } case  2 { si := 15 } case  3 { si :=  7 }
-                    case  4 { si := 12 } case  5 { si :=  8 } case  6 { si :=  9 } case  7 { si := 11 }
-                    case  8 { si :=  7 } case  9 { si :=  7 } case 10 { si := 12 } case 11 { si :=  7 }
-                    case 12 { si :=  6 } case 13 { si := 15 } case 14 { si := 13 } case 15 { si := 11 }
-                }
-                case 2 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si :=  9 } case  1 { si :=  7 } case  2 { si := 15 } case  3 { si := 11 }
-                    case  4 { si :=  8 } case  5 { si :=  6 } case  6 { si :=  6 } case  7 { si := 14 }
-                    case  8 { si := 12 } case  9 { si := 13 } case 10 { si :=  5 } case 11 { si := 14 }
-                    case 12 { si := 13 } case 13 { si := 13 } case 14 { si :=  7 } case 15 { si :=  5 }
-                }
-                case 3 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si := 15 } case  1 { si :=  5 } case  2 { si :=  8 } case  3 { si := 11 }
-                    case  4 { si := 14 } case  5 { si := 14 } case  6 { si :=  6 } case  7 { si := 14 }
-                    case  8 { si :=  6 } case  9 { si :=  9 } case 10 { si := 12 } case 11 { si :=  9 }
-                    case 12 { si := 12 } case 13 { si :=  5 } case 14 { si := 15 } case 15 { si :=  8 }
-                }
-                case 4 {
-                    let idx := mod(j, 16)
-                    switch idx
-                    case  0 { si :=  8 } case  1 { si :=  5 } case  2 { si := 12 } case  3 { si :=  9 }
-                    case  4 { si := 12 } case  5 { si :=  5 } case  6 { si := 14 } case  7 { si :=  6 }
-                    case  8 { si :=  8 } case  9 { si := 13 } case 10 { si :=  6 } case 11 { si :=  5 }
-                    case 12 { si := 15 } case 13 { si := 13 } case 14 { si := 11 } case 15 { si := 11 }
-                }
+                let idx := mod(j, 16)
+                let ri := nibble(wordRow, idx)
+                let si := nibble(rotRow, idx)
 
                 let w := mload(add(xPtr, mul(ri, 0x20)))
-                let tVal := and(add(add(add(a, and(fVal, M32)), w), kr), M32)
+                let tVal := and(add(add(add(a, and(fVal, M32)), w), kk), M32)
                 tVal := and(add(rotl32(tVal, si), e), M32)
 
                 mstore(stPtr, e)
@@ -323,9 +160,31 @@ library Ripemd160 {
                 mstore(add(leftSt, 0x60), h3)
                 mstore(add(leftSt, 0x80), h4)
 
-                // Left path: 80 rounds
-                for { let j := 0 } lt(j, 80) { j := add(j, 1) } {
-                    leftRound(leftSt, xPtr, j)
+                // Left path: 80 rounds (5 groups of 16)
+                for { let g := 0 } lt(g, 5) { g := add(g, 1) } {
+                    let wRow := wordRowL(g)
+                    let rRow := rotRowL(g)
+                    // k constants per group
+                    let kk := 0x00000000
+                    switch g
+                    case 1 { kk := 0x5a827999 }
+                    case 2 { kk := 0x6ed9eba1 }
+                    case 3 { kk := 0x8f1bbcdc }
+                    case 4 { kk := 0xa953fd4e }
+
+                    for { let j := 0 } lt(j, 16) { j := add(j, 1) } {
+                        let b := mload(add(leftSt, 0x20))
+                        let c := mload(add(leftSt, 0x40))
+                        let dd := mload(add(leftSt, 0x60))
+                        let fVal
+                        switch g
+                        case 0 { fVal := f0(b, c, dd) }
+                        case 1 { fVal := f1(b, c, dd) }
+                        case 2 { fVal := f2(b, c, dd) }
+                        case 3 { fVal := f3(b, c, dd) }
+                        case 4 { fVal := f4(b, c, dd) }
+                        rmdRound(leftSt, xPtr, j, wRow, rRow, fVal, kk)
+                    }
                 }
 
                 // Initialize right path state
@@ -335,9 +194,31 @@ library Ripemd160 {
                 mstore(add(rightSt, 0x60), h3)
                 mstore(add(rightSt, 0x80), h4)
 
-                // Right path: 80 rounds
-                for { let j := 0 } lt(j, 80) { j := add(j, 1) } {
-                    rightRound(rightSt, xPtr, j)
+                // Right path: 80 rounds (5 groups of 16, f reversed)
+                for { let g := 0 } lt(g, 5) { g := add(g, 1) } {
+                    let wRow := wordRowR(g)
+                    let rRow := rotRowR(g)
+                    // k constants per group (right path)
+                    let kk := 0x50a28be6
+                    switch g
+                    case 1 { kk := 0x5c4dd124 }
+                    case 2 { kk := 0x6d703ef3 }
+                    case 3 { kk := 0x7a6d76e9 }
+                    case 4 { kk := 0x00000000 }
+
+                    for { let j := 0 } lt(j, 16) { j := add(j, 1) } {
+                        let b := mload(add(rightSt, 0x20))
+                        let c := mload(add(rightSt, 0x40))
+                        let dd := mload(add(rightSt, 0x60))
+                        let fVal
+                        switch g
+                        case 0 { fVal := f4(b, c, dd) }
+                        case 1 { fVal := f3(b, c, dd) }
+                        case 2 { fVal := f2(b, c, dd) }
+                        case 3 { fVal := f1(b, c, dd) }
+                        case 4 { fVal := f0(b, c, dd) }
+                        rmdRound(rightSt, xPtr, j, wRow, rRow, fVal, kk)
+                    }
                 }
 
                 // Read final states
