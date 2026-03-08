@@ -268,10 +268,8 @@ library Ripemd160 {
             mstore(0x40, add(padBuf, paddedLen))
 
             // Copy data
-            let i := 0
-            for {} lt(i, dataLen) { i := add(i, 0x20) } {
-                mstore(add(padBuf, i), mload(add(dataPtr, i)))
-            }
+            mcopy(padBuf, dataPtr, dataLen)
+            let i := dataLen
             // Zero the rest
             for { let j := i } lt(j, paddedLen) { j := add(j, 0x20) } {
                 mstore(add(padBuf, j), 0)
@@ -280,16 +278,13 @@ library Ripemd160 {
             mstore8(add(padBuf, dataLen), 0x80)
 
             // Little-endian 64-bit bit length at end
-            let bitLenLo := and(bitLen, MASK32)
-            let bitLenHi := shr(32, bitLen)
-            mstore8(add(padBuf, sub(paddedLen, 8)), and(bitLenLo, 0xff))
-            mstore8(add(padBuf, sub(paddedLen, 7)), and(shr(8, bitLenLo), 0xff))
-            mstore8(add(padBuf, sub(paddedLen, 6)), and(shr(16, bitLenLo), 0xff))
-            mstore8(add(padBuf, sub(paddedLen, 5)), and(shr(24, bitLenLo), 0xff))
-            mstore8(add(padBuf, sub(paddedLen, 4)), and(bitLenHi, 0xff))
-            mstore8(add(padBuf, sub(paddedLen, 3)), and(shr(8, bitLenHi), 0xff))
-            mstore8(add(padBuf, sub(paddedLen, 2)), and(shr(16, bitLenHi), 0xff))
-            mstore8(add(padBuf, sub(paddedLen, 1)), and(shr(24, bitLenHi), 0xff))
+            // Byte-swap the 64-bit value to little-endian and write
+            function swap64le(x) -> r {
+                x := or(shl(8, and(x, 0x00FF00FF00FF00FF)), shr(8, and(x, 0xFF00FF00FF00FF00)))
+                x := or(shl(16, and(x, 0x0000FFFF0000FFFF)), shr(16, and(x, 0xFFFF0000FFFF0000)))
+                r := or(shl(32, and(x, 0x00000000FFFFFFFF)), shr(32, and(x, 0xFFFFFFFF00000000)))
+            }
+            mstore(add(padBuf, sub(paddedLen, 8)), shl(192, swap64le(bitLen)))
 
             // ── Initialize hash values ──────────────────────────
             let h0 := 0x67452301

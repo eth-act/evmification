@@ -80,9 +80,7 @@ library BLS12381 {
         // Compute y² = x³ + 4 mod p
         bytes memory x3 = Modexp.modexp(xBytes, hex"03", P);
         // x³ + 4 mod p
-        bytes memory four = new bytes(48);
-        four[47] = 0x04;
-        bytes memory ySq = _addmod(x3, four, P);
+        bytes memory ySq = _addmod(x3, hex"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004", P);
 
         // y = y²^((p+1)/4) mod p
         bytes memory yBytes = Modexp.modexp(ySq, P_PLUS_1_DIV_4, P);
@@ -128,12 +126,10 @@ library BLS12381 {
         }
 
         // Check if point is infinity (all zeros)
-        bool isZero = true;
+        bool isZero;
         assembly {
             let src := add(point, 0x20)
-            for { let i := 0 } lt(i, 4) { i := add(i, 0x20) } {
-                if mload(add(src, i)) { isZero := false }
-            }
+            isZero := iszero(or(or(mload(src), mload(add(src, 0x20))), or(mload(add(src, 0x40)), mload(add(src, 0x60)))))
         }
         if (isZero) return result;
 
@@ -196,12 +192,12 @@ library BLS12381 {
         }
 
         // Check if point is infinity (all zeros)
-        bool isZero = true;
+        bool isZero;
         assembly {
             let src := add(point, 0x20)
-            for { let i := 0 } lt(i, 8) { i := add(i, 0x20) } {
-                if mload(add(src, i)) { isZero := false }
-            }
+            let acc := or(or(mload(src), mload(add(src, 0x20))), or(mload(add(src, 0x40)), mload(add(src, 0x60))))
+            acc := or(acc, or(or(mload(add(src, 0x80)), mload(add(src, 0xa0))), or(mload(add(src, 0xc0)), mload(add(src, 0xe0)))))
+            isZero := iszero(acc)
         }
         if (isZero) return result;
 
@@ -304,41 +300,47 @@ library BLS12381 {
 
     /// @dev Compute m - a for 48-byte values (assumes a < m and a != 0).
     function _submod(bytes memory m, bytes memory a) private pure returns (bytes memory result) {
-        uint256 lenM = m.length;
-        uint256 lenA = a.length;
-        result = new bytes(lenM);
-
-        uint256 borrow;
-        unchecked {
-            for (uint256 i = 0; i < lenM; i++) {
-                uint256 digitM = uint8(m[lenM - 1 - i]);
-                uint256 digitA = i < lenA ? uint8(a[lenA - 1 - i]) : 0;
-                uint256 sub = digitA + borrow;
-                if (digitM < sub) {
-                    result[lenM - 1 - i] = bytes1(uint8(digitM + 256 - sub));
-                    borrow = 1;
-                } else {
-                    result[lenM - 1 - i] = bytes1(uint8(digitM - sub));
-                    borrow = 0;
-                }
+        result = new bytes(48);
+        assembly {
+            // Load as (hi: 16 bytes, lo: 32 bytes) big-endian
+            let mLo := mload(add(m, 0x30))
+            let mHi := shr(128, mload(add(m, 0x20)))
+            let aLen := mload(a)
+            let aLo
+            let aHi
+            if gt(aLen, 31) {
+                aLo := mload(add(a, add(0x20, sub(aLen, 32))))
+                aHi := shr(128, mload(add(a, 0x20)))
             }
+            if lt(aLen, 32) {
+                // Short value: load from end, right-aligned
+                aLo := mload(add(a, add(0x20, sub(aLen, min(aLen, 32)))))
+                if lt(aLen, 32) { aLo := shr(mul(sub(32, aLen), 8), aLo) }
+            }
+            if eq(aLen, 32) { aLo := mload(add(a, 0x20)) }
+
+            function min(x, y) -> z { z := y if lt(x, y) { z := x } }
+
+            let rLo := sub(mLo, aLo)
+            let borrow := gt(aLo, mLo)
+            let rHi := sub(sub(mHi, aHi), borrow)
+
+            // Write result: hi first, then lo overwrites lower portion
+            mstore(add(result, 0x20), shl(128, rHi))
+            mstore(add(result, 0x30), rLo)
         }
     }
 
     /// @dev Check if a 48-byte big-endian value is > (p-1)/2.
-    function _isLargerThanHalfP(bytes memory val) private pure returns (bool) {
-        // (p-1)/2 as 48 bytes
-        // p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab
-        // (p-1)/2 = 0x0d0088f51cbff34d258dd3db21a5d66bb23ba5c279c2895fb398695007b587b120f55ffff58a9ffffdcff7fffffffd555
-        bytes memory halfP =
-            hex"0d0088f51cbff34d258dd3db21a5d66bb23ba5c279c2895fb39869507b587b120f55ffff58a9ffffdcff7fffffffd555";
-
-        for (uint256 i = 0; i < 48; i++) {
-            uint8 v = uint8(val[i]);
-            uint8 h = uint8(halfP[i]);
-            if (v > h) return true;
-            if (v < h) return false;
+    function _isLargerThanHalfP(bytes memory val) private pure returns (bool result) {
+        // (p-1)/2 = 0x0d0088f51cbff34d258dd3db21a5d66b | b23ba5c279c2895fb39869507b587b120f55ffff58a9ffffdcff7fffffffd555
+        uint256 halfPHi = 0x0d0088f51cbff34d258dd3db21a5d66b;
+        uint256 halfPLo = 0xb23ba5c279c2895fb39869507b587b120f55ffff58a9ffffdcff7fffffffd555;
+        assembly {
+            let vHi := shr(128, mload(add(val, 0x20)))
+            let vLo := mload(add(val, 0x30))
+            // Compare hi first, then lo
+            result := or(gt(vHi, halfPHi), and(eq(vHi, halfPHi), gt(vLo, halfPLo)))
         }
-        return false; // equal means not larger
     }
 }

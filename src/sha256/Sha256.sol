@@ -103,10 +103,8 @@ library Sha256 {
             mstore(0x40, add(padBuf, paddedLen))
 
             // Copy data
-            let i := 0
-            for {} lt(i, dataLen) { i := add(i, 0x20) } {
-                mstore(add(padBuf, i), mload(add(dataPtr, i)))
-            }
+            mcopy(padBuf, dataPtr, dataLen)
+            let i := dataLen
             // Zero the rest
             for { let j := i } lt(j, paddedLen) { j := add(j, 0x20) } {
                 mstore(add(padBuf, j), 0)
@@ -115,16 +113,7 @@ library Sha256 {
             mstore8(add(padBuf, dataLen), 0x80)
 
             // 64-bit big-endian bit length at end
-            let bitLenHi := shr(32, bitLen)
-            let bitLenLo := and(bitLen, MASK32)
-            mstore8(add(padBuf, sub(paddedLen, 8)), shr(24, bitLenHi))
-            mstore8(add(padBuf, sub(paddedLen, 7)), shr(16, bitLenHi))
-            mstore8(add(padBuf, sub(paddedLen, 6)), shr(8, bitLenHi))
-            mstore8(add(padBuf, sub(paddedLen, 5)), bitLenHi)
-            mstore8(add(padBuf, sub(paddedLen, 4)), shr(24, bitLenLo))
-            mstore8(add(padBuf, sub(paddedLen, 3)), shr(16, bitLenLo))
-            mstore8(add(padBuf, sub(paddedLen, 2)), shr(8, bitLenLo))
-            mstore8(add(padBuf, sub(paddedLen, 1)), bitLenLo)
+            mstore(add(padBuf, sub(paddedLen, 8)), shl(192, bitLen))
 
             // ── Allocate hash state H[0..7] and working state in memory ──
             let hPtr := mload(0x40)              // 8 words * 32 bytes = 256 bytes
@@ -158,13 +147,7 @@ library Sha256 {
                 // Prepare W[0..15] from block (big-endian 32-bit words)
                 for { let t := 0 } lt(t, 16) { t := add(t, 1) } {
                     let off := add(blockPtr, mul(t, 4))
-                    let w := or(
-                        or(shl(24, byte(0, mload(off))),
-                           shl(16, byte(0, mload(add(off, 1))))),
-                        or(shl(8, byte(0, mload(add(off, 2)))),
-                           byte(0, mload(add(off, 3))))
-                    )
-                    mstore(add(wPtr, mul(t, 0x20)), w)
+                    mstore(add(wPtr, mul(t, 0x20)), shr(224, mload(off)))
                 }
 
                 // W[16..63]

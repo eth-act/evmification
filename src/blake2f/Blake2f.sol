@@ -349,8 +349,6 @@ library Blake2f {
         bool finalBlock;
 
         assembly {
-            let ptr := add(input, 0x20)
-
             function swap64(x) -> r {
                 x := and(x, 0xffffffffffffffff)
                 x := or(shl(8, and(x, 0x00FF00FF00FF00FF)), shr(8, and(x, 0xFF00FF00FF00FF00)))
@@ -358,28 +356,27 @@ library Blake2f {
                 r := or(shl(32, and(x, 0x00000000FFFFFFFF)), shr(32, and(x, 0xFFFFFFFF00000000)))
             }
 
+            let ptr := add(input, 0x20)
+
             // Parse rounds (4 bytes big-endian)
             rounds := shr(224, mload(ptr))
 
             // Parse h[0..7] (8 little-endian uint64s starting at offset 4)
             for { let i := 0 } lt(i, 8) { i := add(i, 1) } {
                 let off := add(ptr, add(4, mul(i, 8)))
-                let val := shr(192, mload(off))
-                mstore(add(h, mul(i, 0x20)), swap64(val))
+                mstore(add(h, mul(i, 0x20)), swap64(shr(192, mload(off))))
             }
 
             // Parse m[0..15] (16 little-endian uint64s starting at offset 68)
             for { let i := 0 } lt(i, 16) { i := add(i, 1) } {
                 let off := add(ptr, add(68, mul(i, 8)))
-                let val := shr(192, mload(off))
-                mstore(add(m, mul(i, 0x20)), swap64(val))
+                mstore(add(m, mul(i, 0x20)), swap64(shr(192, mload(off))))
             }
 
             // Parse t[0..1] (2 little-endian uint64s starting at offset 196)
             for { let i := 0 } lt(i, 2) { i := add(i, 1) } {
                 let off := add(ptr, add(196, mul(i, 8)))
-                let val := shr(192, mload(off))
-                mstore(add(t, mul(i, 0x20)), swap64(val))
+                mstore(add(t, mul(i, 0x20)), swap64(shr(192, mload(off))))
             }
 
             // Parse finalBlock (1 byte at offset 212)
@@ -391,7 +388,7 @@ library Blake2f {
         // Encode output as 64 bytes (8 little-endian uint64s)
         output = new bytes(64);
         assembly {
-            function swap64out(x) -> r {
+            function swap64(x) -> r {
                 x := and(x, 0xffffffffffffffff)
                 x := or(shl(8, and(x, 0x00FF00FF00FF00FF)), shr(8, and(x, 0xFF00FF00FF00FF00)))
                 x := or(shl(16, and(x, 0x0000FFFF0000FFFF)), shr(16, and(x, 0xFFFF0000FFFF0000)))
@@ -400,13 +397,7 @@ library Blake2f {
 
             let outPtr := add(output, 0x20)
             for { let i := 0 } lt(i, 8) { i := add(i, 1) } {
-                let val := swap64out(mload(add(res, mul(i, 0x20))))
-                // Write 8 LE bytes at outPtr + i*8
-                // Store as big-endian in top 8 bytes then shift
-                let shifted := shl(192, val)
-                // We need to write exactly 8 bytes at the right position
-                // Use mstore to write 32 bytes and rely on subsequent writes to overwrite
-                mstore(add(outPtr, mul(i, 8)), shifted)
+                mstore(add(outPtr, mul(i, 8)), shl(192, swap64(mload(add(res, mul(i, 0x20))))))
             }
         }
     }
