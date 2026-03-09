@@ -14,45 +14,45 @@ import {Modexp} from "./Modexp.sol";
 ///      Output: Msize bytes (big-endian result, same length as modulus).
 contract ModexpDeployed {
     fallback() external {
-        bytes memory input = msg.data;
         uint256 bSize;
         uint256 eSize;
         uint256 mSize;
         assembly {
-            // Calldata must contain at least the three 32-byte length fields
-            if lt(mload(input), 0x60) { revert(0, 0) }
-            let ptr := add(input, 0x20)
-            bSize := mload(ptr)
-            eSize := mload(add(ptr, 0x20))
-            mSize := mload(add(ptr, 0x40))
+            // calldataload zero-pads past the end, matching native precompile behavior
+            bSize := calldataload(0x00)
+            eSize := calldataload(0x20)
+            mSize := calldataload(0x40)
             // EIP-7823: revert if any operand exceeds 1024 bytes
             if or(gt(bSize, 1024), or(gt(eSize, 1024), gt(mSize, 1024))) { revert(0, 0) }
-            // Calldata must contain the declared operands
-            if lt(mload(input), add(0x60, add(bSize, add(eSize, mSize)))) { revert(0, 0) }
         }
 
+        // new bytes() is zero-initialized, so truncated calldata is implicitly zero-padded
         bytes memory base = new bytes(bSize);
         bytes memory exponent = new bytes(eSize);
         bytes memory modulus = new bytes(mSize);
         assembly {
-            let src := add(add(input, 0x20), 0x60)
-            // Copy base
-            let dst := add(base, 0x20)
-            for { let i := 0 } lt(i, bSize) { i := add(i, 0x20) } {
-                mstore(add(dst, i), mload(add(src, i)))
-            }
-            src := add(src, bSize)
+            let cdLen := calldatasize()
+
+            // Copy base (zero-pad if calldata is truncated)
+            let off := 0x60
+            let avail := 0
+            if gt(cdLen, off) { avail := sub(cdLen, off) }
+            if gt(avail, bSize) { avail := bSize }
+            if gt(avail, 0) { calldatacopy(add(base, 0x20), off, avail) }
+
             // Copy exponent
-            dst := add(exponent, 0x20)
-            for { let i := 0 } lt(i, eSize) { i := add(i, 0x20) } {
-                mstore(add(dst, i), mload(add(src, i)))
-            }
-            src := add(src, eSize)
+            off := add(0x60, bSize)
+            avail := 0
+            if gt(cdLen, off) { avail := sub(cdLen, off) }
+            if gt(avail, eSize) { avail := eSize }
+            if gt(avail, 0) { calldatacopy(add(exponent, 0x20), off, avail) }
+
             // Copy modulus
-            dst := add(modulus, 0x20)
-            for { let i := 0 } lt(i, mSize) { i := add(i, 0x20) } {
-                mstore(add(dst, i), mload(add(src, i)))
-            }
+            off := add(off, eSize)
+            avail := 0
+            if gt(cdLen, off) { avail := sub(cdLen, off) }
+            if gt(avail, mSize) { avail := mSize }
+            if gt(avail, 0) { calldatacopy(add(modulus, 0x20), off, avail) }
         }
 
         bytes memory result = Modexp.modexp(base, exponent, modulus);
