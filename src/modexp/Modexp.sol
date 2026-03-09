@@ -18,7 +18,7 @@ library Modexp {
         bytes memory base,
         bytes memory exponent,
         bytes memory modulus
-    ) internal view returns (bytes memory result) {
+    ) internal pure returns (bytes memory result) {
         if (modulus.length == 0) return new bytes(0);
 
         // Check if modulus is odd (last byte has bit 0 set)
