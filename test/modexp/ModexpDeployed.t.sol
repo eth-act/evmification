@@ -106,4 +106,66 @@ contract ModexpDeployedTest is Test {
         assertTrue(okDep);
         assertEq(outDep, outPre);
     }
+
+    function test_identical_pure_power_of_2() public view {
+        // 3^100 mod 256 — modulus is a pure power of 2
+        bytes memory input = _encodeInput(
+            hex"03",
+            hex"64",
+            hex"0100"
+        );
+        (bool okPre, bytes memory outPre) = _callPrecompile(input);
+        (bool okDep, bytes memory outDep) = _callDeployed(input);
+        assertTrue(okPre);
+        assertTrue(okDep);
+        assertEq(outDep, outPre);
+    }
+
+    function test_identical_even_modulus_large() public view {
+        // Large 64-byte even modulus: 2^65537 mod M
+        bytes memory base = new bytes(64);
+        base[63] = 0x02;
+        bytes memory exponent = hex"010001";
+        bytes memory modulus = new bytes(64);
+        modulus[0] = 0xff;
+        modulus[63] = 0xfe; // even
+
+        bytes memory input = _encodeInput(base, exponent, modulus);
+        (bool okPre, bytes memory outPre) = _callPrecompile(input);
+        (bool okDep, bytes memory outDep) = _callDeployed(input);
+        assertTrue(okPre);
+        assertTrue(okDep);
+        assertEq(outDep, outPre);
+    }
+
+    function test_identical_highly_even_modulus() public view {
+        // 7^255 mod (3 * 2^64) — modulus with many trailing zero bits
+        bytes memory input = _encodeInput(
+            hex"07",
+            hex"ff",
+            hex"030000000000000000"
+        );
+        (bool okPre, bytes memory outPre) = _callPrecompile(input);
+        (bool okDep, bytes memory outDep) = _callDeployed(input);
+        assertTrue(okPre);
+        assertTrue(okDep);
+        assertEq(outDep, outPre);
+    }
+
+    function test_identical_modulus_power_of_2_single_limb() public view {
+        // 0xff^0xffff mod 2^128 — power-of-2 modulus under one 256-bit limb
+        bytes memory modulus = new bytes(17);
+        modulus[0] = 0x01; // rest are zeros → 2^128
+
+        bytes memory input = _encodeInput(
+            hex"ff",
+            hex"ffff",
+            modulus
+        );
+        (bool okPre, bytes memory outPre) = _callPrecompile(input);
+        (bool okDep, bytes memory outDep) = _callDeployed(input);
+        assertTrue(okPre);
+        assertTrue(okDep);
+        assertEq(outDep, outPre);
+    }
 }
