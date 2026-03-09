@@ -215,6 +215,7 @@ library Modexp {
 
     /// @dev Truncate limbs to kBits: mask the top limb.
     function _truncateLimbs(uint256[] memory limbs, uint256 kBits, uint256 kLimbs) private pure {
+        if (kLimbs == 0) return;
         uint256 topBits = kBits % 256;
         if (topBits != 0) {
             uint256 mask = (1 << topBits) - 1;
@@ -320,11 +321,13 @@ library Modexp {
                     mstore(rOff, s2)
                     carry := add(hi, add(c1, lt(s2, s1)))
                 }
-                // Store final carry if in bounds
-                let finalPos := add(i, bLen)
-                if lt(finalPos, outLimbs) {
-                    let rOff := add(resP, mul(finalPos, 0x20))
-                    mstore(rOff, add(mload(rOff), carry))
+                // Propagate final carry through remaining limbs
+                for { let ci := add(i, bLen) } and(lt(ci, outLimbs), gt(carry, 0)) { ci := add(ci, 1) } {
+                    let rOff := add(resP, mul(ci, 0x20))
+                    let old := mload(rOff)
+                    let newVal := add(old, carry)
+                    mstore(rOff, newVal)
+                    carry := lt(newVal, old)
                 }
             }
         }
@@ -410,6 +413,10 @@ library Modexp {
         // Newton iteration: inv = inv * (2 - mOdd * inv) mod 2^precision
         // Each step doubles the number of correct bits.
         // We need ceil(log2(kBits)) iterations.
+        // Save free memory pointer; temporaries are reclaimed each iteration.
+        uint256 freeMemBase;
+        assembly { freeMemBase := mload(0x40) }
+
         uint256 precision = 1;
         while (precision < kBits) {
             precision *= 2;
@@ -417,12 +424,13 @@ library Modexp {
 
             uint256 precLimbs = (precision + 255) / 256;
 
+            assembly { mstore(0x40, freeMemBase) }
+
             // product = mOdd * inv mod 2^precision (low multiply)
             uint256[] memory product = _lowMul(mOddLimbs, inv, mOddLen, kLimbs, precLimbs);
             _truncateLimbs(product, precision, precLimbs);
 
             // twoMinusProduct = negate(product) + 2, all mod 2^precision
-            // negate = two's complement
             uint256[] memory neg = _negateLimbs(product, precLimbs);
             // Add 2 with carry propagation
             {
