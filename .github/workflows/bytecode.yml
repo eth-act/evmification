@@ -44,8 +44,34 @@ jobs:
             fi
           done
 
-      - name: Upload bytecode artifacts
+      - name: Upload all bytecode artifacts
         uses: actions/upload-artifact@v4
         with:
           name: deployed-bytecode
           path: artifacts/
+
+      - name: Upload per-contract artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blake2fDeployed
+          path: artifacts/Blake2fDeployed.*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sha256Deployed
+          path: artifacts/Sha256Deployed.*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ripemd160Deployed
+          path: artifacts/Ripemd160Deployed.*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IdentityDeployed
+          path: artifacts/IdentityDeployed.*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ModexpDeployed
+          path: artifacts/ModexpDeployed.*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PointEvalDeployed
+          path: artifacts/PointEvalDeployed.*
