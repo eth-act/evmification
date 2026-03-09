@@ -19,17 +19,17 @@ library ModexpPow2 {
 
         uint256 kLimbs = (kBits + 255) / 256;
 
-        // Check if exponent is zero → result is 1
-        bool expIsZero = true;
-        for (uint256 i = 0; i < exponent.length; i++) {
-            if (exponent[i] != 0) { expIsZero = false; break; }
+        // Find first non-zero exponent byte (also detects zero exponent)
+        uint256 expLen = exponent.length;
+        uint256 expStart = 0;
+        while (expStart < expLen && exponent[expStart] == 0) {
+            expStart++;
         }
-        if (expIsZero) {
+
+        // Zero exponent → result is 1
+        if (expStart == expLen) {
             result = new bytes(resultLen);
-            // Set the least significant byte to 1
             result[resultLen - 1] = 0x01;
-            // Truncate: if kBits < 8, mask the result byte
-            // But 1 mod 2^kBits = 1 for kBits >= 1, so this is fine
             return result;
         }
 
@@ -51,7 +51,7 @@ library ModexpPow2 {
         r[0] = 1;
 
         // Exponentiation loop (left-to-right square-and-multiply)
-        r = _modexpLoop(r, a, exponent, kBits, kLimbs);
+        r = _modexpLoop(r, a, exponent, expStart, kBits, kLimbs);
 
         // Convert limbs back to bytes
         result = new bytes(resultLen);
@@ -190,21 +190,16 @@ library ModexpPow2 {
     // ── Exponentiation loop ──────────────────────────────────────────
 
     /// @dev Left-to-right binary square-and-multiply with truncated low multiplication.
+    /// @param startByte Index of the first non-zero exponent byte (caller pre-scanned).
     function _modexpLoop(
         uint256[] memory r,
         uint256[] memory a,
         bytes memory exponent,
+        uint256 startByte,
         uint256 kBits,
         uint256 kLimbs
     ) private pure returns (uint256[] memory) {
         uint256 expLen = exponent.length;
-
-        // Skip leading zero bytes
-        uint256 startByte = 0;
-        while (startByte < expLen && exponent[startByte] == 0) {
-            startByte++;
-        }
-        if (startByte == expLen) return r; // exponent is zero
 
         // Find the topmost set bit in the first non-zero byte
         uint8 b = uint8(exponent[startByte]);

@@ -27,30 +27,25 @@ library Modexp {
             return ModexpMontgomery.modexp(base, exponent, modulus);
         }
 
-        // Even modulus: CRT decomposition
-        // Factor modulus = mOdd * 2^kBits
-        uint256 kBits = _countTrailingZeroBits(modulus);
+        // Even modulus: check for all-zero modulus before doing work
+        if (_isZeroBytes(modulus)) {
+            return new bytes(modLen);
+        }
 
-        // Extract mOdd = modulus >> kBits
+        // CRT decomposition: factor modulus = mOdd * 2^kBits
+        uint256 kBits = _countTrailingZeroBits(modulus);
         bytes memory mOdd = _rightShiftBytes(modulus, kBits);
 
-        // Check if mOdd == 1 (pure power of 2)
+        // Pure power of 2: mOdd == 1
         if (_isOneBytes(mOdd)) {
-            // Just compute base^exp mod 2^kBits, padded to modLen
             bytes memory pow2Result = ModexpPow2.modexp(base, exponent, kBits);
             result = new bytes(modLen);
-            // Copy pow2Result into the least significant bytes of result
             uint256 pow2Len = pow2Result.length;
             uint256 offset = modLen - pow2Len;
             assembly {
                 mcopy(add(add(result, 0x20), offset), add(pow2Result, 0x20), pow2Len)
             }
             return result;
-        }
-
-        // Check if modulus is all zeros
-        if (_isZeroBytes(modulus)) {
-            return new bytes(modLen);
         }
 
         // Compute r1 = base^exp mod mOdd (via Montgomery)
@@ -459,12 +454,12 @@ library Modexp {
             _truncateLimbs(newInv, precision, precLimbs);
 
             // Copy newInv back into inv (expanding to kLimbs)
-            for (uint256 i = 0; i < kLimbs; i++) {
-                if (i < precLimbs) {
-                    inv[i] = newInv[i];
-                } else {
-                    inv[i] = 0;
-                }
+            assembly {
+                mcopy(add(inv, 0x20), add(newInv, 0x20), mul(precLimbs, 0x20))
+            }
+            // Zero out remaining limbs
+            for (uint256 i = precLimbs; i < kLimbs; i++) {
+                inv[i] = 0;
             }
         }
 
@@ -494,14 +489,9 @@ library Modexp {
         uint256[] memory mOddInv = _computeModInvPow2(mOddLimbs, mOddLimbCount, kBits, kLimbs);
 
         // diff = (r2 - r1) mod 2^kBits
-        // We need r1 truncated to kLimbs for the subtraction
-        uint256[] memory r1k = new uint256[](kLimbs);
-        for (uint256 i = 0; i < kLimbs; i++) {
-            if (i < totalLimbs) {
-                r1k[i] = r1Limbs[i];
-            }
-        }
-        uint256[] memory diff = _subLimbs(r2Limbs, kLimbs, r1k, kLimbs, kLimbs);
+        // _subLimbs reads at most kLimbs from each input, so r1Limbs (totalLimbs) is safe
+        uint256 r1SubLen = totalLimbs < kLimbs ? totalLimbs : kLimbs;
+        uint256[] memory diff = _subLimbs(r2Limbs, kLimbs, r1Limbs, r1SubLen, kLimbs);
         _truncateLimbs(diff, kBits, kLimbs);
 
         // x = (diff * mOddInv) mod 2^kBits
