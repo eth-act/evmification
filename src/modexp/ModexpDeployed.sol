@@ -19,10 +19,16 @@ contract ModexpDeployed {
         uint256 eSize;
         uint256 mSize;
         assembly {
+            // Calldata must contain at least the three 32-byte length fields
+            if lt(mload(input), 0x60) { revert(0, 0) }
             let ptr := add(input, 0x20)
             bSize := mload(ptr)
             eSize := mload(add(ptr, 0x20))
             mSize := mload(add(ptr, 0x40))
+            // EIP-7823: revert if any operand exceeds 1024 bytes
+            if or(gt(bSize, 1024), or(gt(eSize, 1024), gt(mSize, 1024))) { revert(0, 0) }
+            // Calldata must contain the declared operands
+            if lt(mload(input), add(0x60, add(bSize, add(eSize, mSize)))) { revert(0, 0) }
         }
 
         bytes memory base = new bytes(bSize);
