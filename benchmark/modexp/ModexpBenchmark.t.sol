@@ -138,4 +138,61 @@ contract ModexpBenchmarkTest is Test {
         mod[0] = 0x02;
         barrettCaller.modexp(base, exp, mod);
     }
+
+    // base=1 with 1024-byte even modulus and large exponent
+    function test_modexp_deployed_base1_1024B() public view {
+        bytes memory base = new bytes(1024);
+        base[1023] = 0x01;
+        bytes memory exp = new bytes(1024);
+        exp[0] = 0xff;
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        deployedCaller.call(base, exp, mod);
+    }
+
+    function test_modexp_barrett_base1_1024B() public view {
+        bytes memory base = new bytes(1024);
+        base[1023] = 0x01;
+        bytes memory exp = new bytes(1024);
+        exp[0] = 0xff;
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        barrettCaller.modexp(base, exp, mod);
+    }
+
+    // base=0 with 1024-byte even modulus
+    function test_modexp_deployed_base0_1024B() public view {
+        bytes memory base = new bytes(1024); // all zeros
+        bytes memory exp = new bytes(1024);
+        exp[0] = 0xff;
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        deployedCaller.call(base, exp, mod);
+    }
+
+    function test_modexp_barrett_base0_1024B() public view {
+        bytes memory base = new bytes(1024); // all zeros
+        bytes memory exp = new bytes(1024);
+        exp[0] = 0xff;
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        barrettCaller.modexp(base, exp, mod);
+    }
+
+    // AI-reported edge case: 1-byte base, 0 exp, 1024-byte modulus (size mismatch)
+    function test_modexp_deployed_exp0_small_base_big_mod() public view {
+        bytes memory base = hex"01";           // 1 byte
+        bytes memory exp = hex"00";            // 1 byte, value 0
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        deployedCaller.call(base, exp, mod);
+    }
+
+    function test_modexp_barrett_exp0_small_base_big_mod() public view {
+        bytes memory base = hex"01";
+        bytes memory exp = hex"00";
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        barrettCaller.modexp(base, exp, mod);
+    }
 }

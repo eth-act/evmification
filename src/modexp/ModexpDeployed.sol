@@ -91,6 +91,61 @@ contract ModexpDeployed {
             }
         }
 
+        // Fast path: base=0 → 0^e = 0, base=1 → 1^e = 1 mod m.
+        // (We already know exp > 0 from the check above.)
+        assembly {
+            let baseOff := 0x60
+
+            // Scan base prefix (all bytes except last) for any nonzero
+            let prefNZ := 0
+            if gt(bSize, 1) {
+                let prefEnd := add(baseOff, sub(bSize, 1))
+                for { let p := baseOff } lt(p, prefEnd) { p := add(p, 0x20) } {
+                    let w := calldataload(p)
+                    let rem := sub(prefEnd, p)
+                    if lt(rem, 0x20) { w := shr(mul(sub(0x20, rem), 8), w) }
+                    if w { prefNZ := 1 p := prefEnd }
+                }
+            }
+
+            if iszero(prefNZ) {
+                let lastByte := 0
+                if gt(bSize, 0) {
+                    lastByte := byte(0, calldataload(sub(add(baseOff, bSize), 1)))
+                }
+
+                // base=0: result is 0 (mSize zero bytes)
+                if iszero(lastByte) {
+                    let out := mload(0x40)
+                    calldatacopy(out, calldatasize(), mSize)
+                    return(out, mSize)
+                }
+
+                // base=1: result is 1 if m > 1, else 0
+                if eq(lastByte, 1) {
+                    let modOff := add(add(0x60, bSize), eSize)
+                    let out := mload(0x40)
+                    calldatacopy(out, calldatasize(), mSize)
+
+                    let gt1 := 0
+                    if gt(mSize, 1) {
+                        let prefEnd := add(modOff, sub(mSize, 1))
+                        for { let p := modOff } lt(p, prefEnd) { p := add(p, 0x20) } {
+                            let w := calldataload(p)
+                            let rem := sub(prefEnd, p)
+                            if lt(rem, 0x20) { w := shr(mul(sub(0x20, rem), 8), w) }
+                            if w { gt1 := 1 p := prefEnd }
+                        }
+                    }
+                    if and(iszero(gt1), gt(mSize, 0)) {
+                        if gt(byte(0, calldataload(sub(add(modOff, mSize), 1))), 1) { gt1 := 1 }
+                    }
+                    if gt1 { mstore8(add(out, sub(mSize, 1)), 1) }
+                    return(out, mSize)
+                }
+            }
+        }
+
         // new bytes() is zero-initialized, so truncated calldata is implicitly zero-padded
         bytes memory base = new bytes(bSize);
         bytes memory exponent = new bytes(eSize);
