@@ -52,6 +52,45 @@ contract ModexpDeployed {
             }
         }
 
+        // Fast path: exponent is all zeros → b^0 mod m = 1 (or 0 if m ≤ 1).
+        // Avoids expensive Barrett/Montgomery setup for trivial computations.
+        assembly {
+            let expOff := add(0x60, bSize)
+            let expEnd := add(expOff, eSize)
+
+            // Scan exponent word-at-a-time
+            let expIsZero := 1
+            for { let p := expOff } lt(p, expEnd) { p := add(p, 0x20) } {
+                let w := calldataload(p)
+                let rem := sub(expEnd, p)
+                if lt(rem, 0x20) { w := shr(mul(sub(0x20, rem), 8), w) }
+                if w { expIsZero := 0 p := expEnd }
+            }
+
+            if expIsZero {
+                let modOff := expEnd
+                let out := mload(0x40)
+                calldatacopy(out, calldatasize(), mSize) // zero-fill
+
+                // Check m > 1: any prefix byte nonzero, OR last byte > 1
+                let gt1 := 0
+                if gt(mSize, 1) {
+                    let prefEnd := add(modOff, sub(mSize, 1))
+                    for { let p := modOff } lt(p, prefEnd) { p := add(p, 0x20) } {
+                        let w := calldataload(p)
+                        let rem := sub(prefEnd, p)
+                        if lt(rem, 0x20) { w := shr(mul(sub(0x20, rem), 8), w) }
+                        if w { gt1 := 1 p := prefEnd }
+                    }
+                }
+                if and(iszero(gt1), gt(mSize, 0)) {
+                    if gt(byte(0, calldataload(sub(add(modOff, mSize), 1))), 1) { gt1 := 1 }
+                }
+                if gt1 { mstore8(add(out, sub(mSize, 1)), 1) }
+                return(out, mSize)
+            }
+        }
+
         // new bytes() is zero-initialized, so truncated calldata is implicitly zero-padded
         bytes memory base = new bytes(bSize);
         bytes memory exponent = new bytes(eSize);

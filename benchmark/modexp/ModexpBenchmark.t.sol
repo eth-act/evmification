@@ -47,6 +47,12 @@ contract ModexpDeployedCaller {
         require(ok);
         r = bytes32(out);
     }
+    function call(bytes memory base, bytes memory exp, bytes memory mod) external view returns (bytes memory) {
+        bytes memory input = abi.encodePacked(uint256(base.length), uint256(exp.length), uint256(mod.length), base, exp, mod);
+        (bool ok, bytes memory out) = deployed.staticcall(input);
+        require(ok);
+        return out;
+    }
 }
 
 contract ModexpBenchmarkTest is Test {
@@ -112,5 +118,24 @@ contract ModexpBenchmarkTest is Test {
 
     function test_modexp_precompile_256() public view {
         caller.modexp(abi.encodePacked(BASE_256), abi.encodePacked(EXP_256), abi.encodePacked(MOD_256));
+    }
+
+    // exp=0 with 1024-byte even modulus: tests the fast path vs expensive Barrett setup
+    function test_modexp_deployed_exp0_1024B() public view {
+        bytes memory base = new bytes(1024);
+        base[0] = 0x01;
+        bytes memory exp = new bytes(1024); // all zeros
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        deployedCaller.call(base, exp, mod);
+    }
+
+    function test_modexp_barrett_exp0_1024B() public view {
+        bytes memory base = new bytes(1024);
+        base[0] = 0x01;
+        bytes memory exp = new bytes(1024); // all zeros
+        bytes memory mod = new bytes(1024);
+        mod[0] = 0x02;
+        barrettCaller.modexp(base, exp, mod);
     }
 }
