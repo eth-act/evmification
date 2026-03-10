@@ -109,28 +109,17 @@ contract ModexpDeployed {
         bytes memory exponent = new bytes(eSize);
         bytes memory modulus = new bytes(mSize);
         assembly {
-            let cdLen := calldatasize()
+            function cdCopySegment(dst, off, sz) {
+                let cdLen := calldatasize()
+                let avail := 0
+                if gt(cdLen, off) { avail := sub(cdLen, off) }
+                if gt(avail, sz) { avail := sz }
+                if gt(avail, 0) { calldatacopy(add(dst, 0x20), off, avail) }
+            }
 
-            // Copy base (zero-pad if calldata is truncated)
-            let off := 0x60
-            let avail := 0
-            if gt(cdLen, off) { avail := sub(cdLen, off) }
-            if gt(avail, bSize) { avail := bSize }
-            if gt(avail, 0) { calldatacopy(add(base, 0x20), off, avail) }
-
-            // Copy exponent
-            off := add(0x60, bSize)
-            avail := 0
-            if gt(cdLen, off) { avail := sub(cdLen, off) }
-            if gt(avail, eSize) { avail := eSize }
-            if gt(avail, 0) { calldatacopy(add(exponent, 0x20), off, avail) }
-
-            // Copy modulus
-            off := add(off, eSize)
-            avail := 0
-            if gt(cdLen, off) { avail := sub(cdLen, off) }
-            if gt(avail, mSize) { avail := mSize }
-            if gt(avail, 0) { calldatacopy(add(modulus, 0x20), off, avail) }
+            cdCopySegment(base, 0x60, bSize)
+            cdCopySegment(exponent, add(0x60, bSize), eSize)
+            cdCopySegment(modulus, add(add(0x60, bSize), eSize), mSize)
         }
 
         bytes memory result = Modexp.modexp(base, exponent, modulus);

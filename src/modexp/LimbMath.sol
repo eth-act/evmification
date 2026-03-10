@@ -14,7 +14,10 @@ library LimbMath {
             let end := add(ptr, len)
             z := 1
             for {} lt(ptr, end) { ptr := add(ptr, 0x20) } {
-                if mload(ptr) { z := 0 ptr := end }
+                let w := mload(ptr)
+                let rem := sub(end, ptr)
+                if lt(rem, 0x20) { w := shr(mul(sub(0x20, rem), 8), w) }
+                if w { z := 0 ptr := end }
             }
         }
     }
@@ -27,7 +30,10 @@ library LimbMath {
             let end := add(ptr, prefixLen)
             z := 1
             for {} lt(ptr, end) { ptr := add(ptr, 0x20) } {
-                if mload(ptr) { z := 0 ptr := end }
+                let w := mload(ptr)
+                let rem := sub(end, ptr)
+                if lt(rem, 0x20) { w := shr(mul(sub(0x20, rem), 8), w) }
+                if w { z := 0 ptr := end }
             }
             if z { z := eq(byte(0, mload(add(add(b, 0x20), prefixLen))), 0x01) }
         }

@@ -77,6 +77,7 @@ library ModexpMontgomery {
     // ── Square-and-multiply ───────────────────────────────────────────
 
     /// @dev Left-to-right binary exponentiation in the Montgomery domain.
+    ///      Recycles temporary memory each iteration to avoid MemoryOOG on large exponents.
     function _modexpLoop(
         uint256[] memory rM,
         uint256[] memory aM,
@@ -94,6 +95,11 @@ library ModexpMontgomery {
         }
         if (startByte == expLen) return rM; // exponent is zero
 
+        // Save free memory pointer; all temporaries from _montMul will be
+        // allocated above this mark and reclaimed each iteration.
+        uint256 freeMemBase;
+        assembly { freeMemBase := mload(0x40) }
+
         // Find the topmost set bit in the first non-zero byte
         uint8 b = uint8(exponent[startByte]);
         uint256 topBit = 7;
@@ -103,9 +109,11 @@ library ModexpMontgomery {
 
         // Process first non-zero byte (from topBit down to bit 0)
         for (uint256 bit = topBit;;) {
-            rM = _montMul(rM, rM, n, n0inv, k); // square
+            assembly { mstore(0x40, freeMemBase) }
+            LimbMath.copyLimbs(_montMul(rM, rM, n, n0inv, k), rM, k); // square
             if ((b >> bit) & 1 == 1) {
-                rM = _montMul(rM, aM, n, n0inv, k); // multiply
+                assembly { mstore(0x40, freeMemBase) }
+                LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k); // multiply
             }
             if (bit == 0) break;
             unchecked { bit--; }
@@ -116,9 +124,11 @@ library ModexpMontgomery {
             b = uint8(exponent[byteIdx]);
             for (uint256 bit = 8; bit > 0;) {
                 unchecked { bit--; }
-                rM = _montMul(rM, rM, n, n0inv, k); // square
+                assembly { mstore(0x40, freeMemBase) }
+                LimbMath.copyLimbs(_montMul(rM, rM, n, n0inv, k), rM, k); // square
                 if ((b >> bit) & 1 == 1) {
-                    rM = _montMul(rM, aM, n, n0inv, k); // multiply
+                    assembly { mstore(0x40, freeMemBase) }
+                    LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k); // multiply
                 }
             }
         }
