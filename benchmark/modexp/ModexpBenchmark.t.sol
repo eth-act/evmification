@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ModexpPrecompile} from "../../src/modexp/ModexpPrecompile.sol";
 import {ModexpMontgomery} from "../../src/modexp/ModexpMontgomery.sol";
 import {ModexpBarrett} from "../../src/modexp/ModexpBarrett.sol";
+import {ModexpDeployed} from "../../src/modexp/ModexpDeployed.sol";
 
 /// @notice Thin wrapper to make library calls external for gas measurement.
 contract ModexpCaller {
@@ -37,10 +38,22 @@ contract BarrettModexpBenchCaller {
     }
 }
 
+contract ModexpDeployedCaller {
+    address immutable deployed;
+    constructor(address _deployed) { deployed = _deployed; }
+    function call256(bytes32 base, bytes32 exp, bytes32 mod) external view returns (bytes32 r) {
+        bytes memory input = abi.encodePacked(uint256(32), uint256(32), uint256(32), base, exp, mod);
+        (bool ok, bytes memory out) = deployed.staticcall(input);
+        require(ok);
+        r = bytes32(out);
+    }
+}
+
 contract ModexpBenchmarkTest is Test {
     ModexpCaller caller;
     MontgomeryModexpBenchCaller montgomeryCaller;
     BarrettModexpBenchCaller barrettCaller;
+    ModexpDeployedCaller deployedCaller;
 
     // Exponent e=65537
     bytes constant E = hex"010001";
@@ -53,10 +66,16 @@ contract ModexpBenchmarkTest is Test {
     bytes constant N_4096 = hex"ddfed2f4842c0139cf34b66c8930691bbd712677e446228ac1e95680c839442f1ad5c814f6e26966dd3103f03d2ee39f84abcd821abc1825ac03678a5a94c2d5475f64c176b1cb9b853083414fc6959644f70d0c546a6ac686dedf656297e46ff183e3b3b2e2f70c00a32515130a9467b5142edb8a385fb5633e76d91ba10956a3ab4088254775518b85dc938c5cd7a77773c730ca92f3c11e7acf39bac882b8158691a271fe9d591949cbd8b4ad230693a70162b9314d102b6640f65e686e3886367403d54da2f7fa9a2b0c3c111a05f9528ebe1744fd6a0a94b2cb3d265d9e8a0362bf05a8f74de5eed9d7eb49a0297cbdf32296e98de37e688272c8f1e2738fe548eb9a4dc1fda9aff46fe3d9c789190a884c950c277de57512b9ed6af7e8390aa1a14200c8d59bd441a905c8e7c04428af3f5971690010f1c913f670e9d816c21b6577fc82e235b47bcc1de9165dff5b4d1d13d55b92e81dab6936e34ddb2ddeff4258b459eaaf40557ef7b48471e4bebb7d2f2f05c4baf505ea622dcad4803b66a2dd7ec48d9f00ce683752e1ca21d57bf6433f7ada03d6c7cd706eb7471c09b46f21803c2abbedc77f04b4ad8f3a4ee82e072dc6e5dd4b423e492952e93c1cc38b1ebba2f88049c2cd7319c77b5edd64e3a7c24612f6cd6cdab7db863d3fdc4eafa0d674fe2469396f38f91b4b37b544e690db3153849d561c20e3f0e7";
     bytes constant BASE_4096 = hex"c0173dbfcad4873a603b1b4f1d69d2edaac55618cd9066f6ef19e81d77c27979ee933a2cca6df03cde4f44ad0bf22d35f7162b15cab74263460770084da465e6524cb169a290a66bf9f8d0067c528f090e82b7c23bdd9c2f5520e306f5203f4efd9d106918209b598b8e5259ae755a96bb8af694a3385cb1926e098f121304e3e95d8b4c6909ed92b70724122d0a03856f56ba35e6fa9735f3e63a78abe596d03d07e168e433dd7426405718696c7921f7b3cb2b6cd54cfc3e6c6923e9920f70d6113877d515d7a3b1f2148f54bf4b54638595c02b808bf2c8513d7a859dacb5efdc53a8acb77fab0f8fe694d5ce6b45c392143a073b5f546d00c7d37817d7e1c48dcb15162510178158026034b3544699a5f9ee9f24fdfa3b617d0991a5ad8a25a3b63e291b5f6cbf289e4b0fd49d38630e095778ba3b63f2134e06019ba52587c71c6f0ee455ef28edeabd7bc51223692a42d98fb7764f888f3c9df4299e394c8c0c6e8923321fa28da7bf6c3292a31d83f003dc3dce3efee0434510bdb9fafa56ada2c893c4113914e62ae9d914cb7b81554fb859adb969be05dc271e4d8d6d750bd2e0a9e4687aa524d6ec4f464915cc55b99c991e681092d7411296b9305d1dd5b5c39a8bd8dca572e4412ef7495a71f6ea64a0c7b918cba3444ebcfa5ced91d7ca04f4cb162652ce19a77f2893fae01d4caf650ac1b7650fc653124eaf";
 
+    // 256-bit test values for the fast path benchmark
+    bytes32 constant BASE_256 = bytes32(uint256(0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef));
+    bytes32 constant EXP_256 = bytes32(uint256(0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321));
+    bytes32 constant MOD_256 = bytes32(uint256(0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f)); // secp256k1 p
+
     function setUp() public {
         caller = new ModexpCaller();
         montgomeryCaller = new MontgomeryModexpBenchCaller();
         barrettCaller = new BarrettModexpBenchCaller();
+        deployedCaller = new ModexpDeployedCaller(address(new ModexpDeployed()));
     }
 
     function test_modexp_precompile_2048() public view {
@@ -81,5 +100,17 @@ contract ModexpBenchmarkTest is Test {
 
     function test_modexp_barrett_4096() public view {
         barrettCaller.modexp(BASE_4096, E, N_4096);
+    }
+
+    function test_modexp_deployed_256() public view {
+        deployedCaller.call256(BASE_256, EXP_256, MOD_256);
+    }
+
+    function test_modexp_montgomery_256() public view {
+        montgomeryCaller.modexp(abi.encodePacked(BASE_256), abi.encodePacked(EXP_256), abi.encodePacked(MOD_256));
+    }
+
+    function test_modexp_precompile_256() public view {
+        caller.modexp(abi.encodePacked(BASE_256), abi.encodePacked(EXP_256), abi.encodePacked(MOD_256));
     }
 }

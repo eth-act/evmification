@@ -26,6 +26,32 @@ contract ModexpDeployed {
             if or(gt(bSize, 1024), or(gt(eSize, 1024), gt(mSize, 1024))) { revert(0, 0) }
         }
 
+        // Fast path: all operands fit in a single uint256 — pure stack arithmetic
+        if (bSize <= 32 && eSize <= 32 && mSize <= 32) {
+            assembly {
+                // calldataload right-aligns values shorter than 32 bytes via
+                // shr, giving us the correct big-endian uint256 value.
+                let b := shr(mul(sub(32, bSize), 8), calldataload(0x60))
+                let e := shr(mul(sub(32, eSize), 8), calldataload(add(0x60, bSize)))
+                let m := shr(mul(sub(32, mSize), 8), calldataload(add(add(0x60, bSize), eSize)))
+
+                let r := 0
+                if gt(m, 1) {
+                    r := 1
+                    b := mod(b, m)
+                    for {} gt(e, 0) {} {
+                        if and(e, 1) { r := mulmod(r, b, m) }
+                        b := mulmod(b, b, m)
+                        e := shr(1, e)
+                    }
+                }
+
+                // Return mSize bytes (big-endian, left-padded with zeros)
+                mstore(0x00, r)
+                return(sub(0x20, mSize), mSize)
+            }
+        }
+
         // new bytes() is zero-initialized, so truncated calldata is implicitly zero-padded
         bytes memory base = new bytes(bSize);
         bytes memory exponent = new bytes(eSize);
