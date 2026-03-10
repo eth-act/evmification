@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import {LimbMath} from "./LimbMath.sol";
 
 /// @title ModexpBarrett
 /// @notice Barrett-reduction modular exponentiation.
@@ -17,7 +18,7 @@ library ModexpBarrett {
         if (modLen == 0) return new bytes(0);
 
         result = new bytes(modLen);
-        if (_isZeroBytes(modulus) || _isOneBytes(modulus)) return result;
+        if (LimbMath.isZeroBytes(modulus) || LimbMath.isOneBytes(modulus)) return result;
 
         // Strip leading zero bytes so k reflects the actual modulus size.
         // Barrett requires that the top limb of n is non-zero.
@@ -45,8 +46,8 @@ library ModexpBarrett {
 
         uint256 k = (modLen + 31) / 32;
 
-        uint256[] memory n = _bytesToLimbs(modulus, k);
-        uint256[] memory a = _reduceBase(base, n, k);
+        uint256[] memory n = LimbMath.bytesToLimbs(modulus, k);
+        uint256[] memory a = LimbMath.reduceBase(base, n, k);
 
         // Barrett constant: mu = floor(2^(512k) / n), has k+1 limbs
         uint256[] memory mu = _computeBarrettConstant(n, k);
@@ -58,103 +59,7 @@ library ModexpBarrett {
         // Square-and-multiply
         r = _barrettModexpLoop(r, a, exponent, n, mu, k);
 
-        _limbsToBytes(r, result, modLen);
-    }
-
-    // ── Byte-level helpers ────────────────────────────────────────────
-
-    function _isZeroBytes(bytes memory b) private pure returns (bool z) {
-        assembly {
-            let len := mload(b)
-            let ptr := add(b, 0x20)
-            let end := add(ptr, len)
-            z := 1
-            for {} lt(ptr, end) { ptr := add(ptr, 0x20) } {
-                if mload(ptr) { z := 0 ptr := end }
-            }
-        }
-    }
-
-    function _isOneBytes(bytes memory b) private pure returns (bool z) {
-        assembly {
-            let len := mload(b)
-            let ptr := add(b, 0x20)
-            // Check all bytes except the last are zero (word-at-a-time for prefix)
-            let prefixLen := sub(len, 1)
-            let end := add(ptr, prefixLen)
-            z := 1
-            for {} lt(ptr, end) { ptr := add(ptr, 0x20) } {
-                if mload(ptr) { z := 0 ptr := end }
-            }
-            // Check last byte is 0x01
-            if z { z := eq(byte(0, mload(add(add(b, 0x20), prefixLen))), 0x01) }
-        }
-    }
-
-    // ── Limb conversion ──────────────────────────────────────────────
-
-    function _bytesToLimbs(bytes memory data, uint256 k) private pure returns (uint256[] memory limbs) {
-        limbs = new uint256[](k);
-        uint256 dataLen = data.length;
-        uint256 fullLimbs = dataLen / 32;
-
-        for (uint256 i = 0; i < fullLimbs; i++) {
-            uint256 offset = dataLen - (i + 1) * 32;
-            assembly {
-                mstore(
-                    add(add(limbs, 0x20), mul(i, 0x20)),
-                    mload(add(add(data, 0x20), offset))
-                )
-            }
-        }
-
-        uint256 rem = dataLen % 32;
-        if (rem > 0) {
-            assembly {
-                mstore(
-                    add(add(limbs, 0x20), mul(fullLimbs, 0x20)),
-                    shr(mul(sub(32, rem), 8), mload(add(data, 0x20)))
-                )
-            }
-        }
-    }
-
-    function _limbsToBytes(uint256[] memory limbs, bytes memory out, uint256 dataLen) private pure {
-        uint256 fullLimbs = dataLen / 32;
-
-        for (uint256 i = 0; i < fullLimbs; i++) {
-            uint256 offset = dataLen - (i + 1) * 32;
-            uint256 val = limbs[i];
-            assembly {
-                mstore(add(add(out, 0x20), offset), val)
-            }
-        }
-
-        uint256 rem = dataLen % 32;
-        if (rem > 0) {
-            assembly {
-                let val := mload(add(add(limbs, 0x20), mul(fullLimbs, 0x20)))
-                let shift := mul(sub(32, rem), 8)
-                let shifted := shl(shift, val)
-                let ptr := add(out, 0x20)
-                let existing := mload(ptr)
-                let mask := not(sub(shl(shift, 1), 1))
-                mstore(ptr, or(and(shifted, mask), and(existing, not(mask))))
-            }
-        }
-    }
-
-    /// @dev Reduces base mod n via schoolbook division remainder.
-    function _reduceBase(bytes memory base, uint256[] memory n, uint256 k)
-        private pure returns (uint256[] memory)
-    {
-        uint256 baseLen = base.length;
-        if (baseLen == 0) return new uint256[](k);
-        uint256 baseK = (baseLen + 31) / 32;
-        if (baseK < k) baseK = k;
-        uint256[] memory baseLimbs = _bytesToLimbs(base, baseK);
-        (, uint256[] memory rem) = _schoolbookDiv(baseLimbs, baseK, n, k);
-        return rem;
+        LimbMath.limbsToBytes(r, result, modLen);
     }
 
     // ── Barrett constant computation ──────────────────────────────────
@@ -163,262 +68,11 @@ library ModexpBarrett {
     function _computeBarrettConstant(uint256[] memory n, uint256 k)
         private pure returns (uint256[] memory)
     {
-        // Construct 2^(512k) as a (2k+1)-limb number: all zeros except limb[2k] = 1
         uint256 dLen = 2 * k + 1;
         uint256[] memory dividend = new uint256[](dLen);
         dividend[2 * k] = 1;
-        (uint256[] memory mu,) = _schoolbookDiv(dividend, dLen, n, k);
+        (uint256[] memory mu,) = LimbMath.schoolbookDiv(dividend, dLen, n, k);
         return mu;
-    }
-
-    // ── Division helpers ──────────────────────────────────────────────
-
-    /// @dev 512-by-256 division: (hi:lo) / d -> (quotient, remainder).
-    ///      Requires hi < d (quotient fits in 256 bits).
-    ///      Uses mulmod/addmod for remainder, then modular-inverse for exact quotient
-    ///      (Uniswap V3 / Solmate technique).
-    function _div512by256(uint256 hi, uint256 lo, uint256 d)
-        private pure returns (uint256 q, uint256 rem)
-    {
-        assembly {
-            if iszero(hi) {
-                q := div(lo, d)
-                rem := mod(lo, d)
-            }
-            if gt(hi, 0) {
-                // Step 1: remainder = (hi * 2^256 + lo) mod d
-                let r256 := addmod(mod(not(0), d), 1, d)
-                rem := addmod(mulmod(hi, r256, d), lo, d)
-
-                // Step 2: exact numerator = (hi * 2^256 + lo) - rem = q * d
-                let lo_e := sub(lo, rem)
-                let hi_e := sub(hi, lt(lo, rem))
-
-                // Step 3: factor out largest power of 2 from d
-                let twos := and(d, sub(0, d))
-                d := div(d, twos)
-
-                // Step 4: divide exact numerator by twos
-                lo_e := div(lo_e, twos)
-                let flip := add(div(sub(0, twos), twos), 1)
-                lo_e := or(lo_e, mul(hi_e, flip))
-
-                // Step 5: modular inverse of d (now odd) mod 2^256
-                let inv := xor(mul(3, d), 2)
-                inv := mul(inv, sub(2, mul(d, inv)))
-                inv := mul(inv, sub(2, mul(d, inv)))
-                inv := mul(inv, sub(2, mul(d, inv)))
-                inv := mul(inv, sub(2, mul(d, inv)))
-                inv := mul(inv, sub(2, mul(d, inv)))
-                inv := mul(inv, sub(2, mul(d, inv)))
-
-                // Step 6: quotient
-                q := mul(lo_e, inv)
-            }
-        }
-    }
-
-    /// @dev Schoolbook long division: dividend[0..dLen-1] / divisor[0..k-1].
-    ///      All arrays are little-endian limbs.
-    function _schoolbookDiv(
-        uint256[] memory dividend,
-        uint256 dLen,
-        uint256[] memory divisor,
-        uint256 k
-    ) private pure returns (uint256[] memory quotient, uint256[] memory rem) {
-        rem = new uint256[](k);
-
-        // Find actual length of dividend (strip leading zero limbs)
-        uint256 m = dLen;
-        while (m > 0 && dividend[m - 1] == 0) {
-            m--;
-        }
-        if (m == 0) {
-            quotient = new uint256[](1);
-            return (quotient, rem);
-        }
-
-        // Find effective number of significant limbs in divisor
-        uint256 kEff = k;
-        while (kEff > 1 && divisor[kEff - 1] == 0) {
-            kEff--;
-        }
-
-        // Single-limb effective divisor: use simple division
-        if (kEff == 1) {
-            uint256 d = divisor[0];
-            quotient = new uint256[](m);
-            uint256 remainder = 0;
-            for (uint256 i = m; i > 0;) {
-                unchecked { i--; }
-                uint256 q;
-                (q, remainder) = _div512by256(remainder, dividend[i], d);
-                quotient[i] = q;
-            }
-            rem[0] = remainder;
-            return (quotient, rem);
-        }
-
-        // Multi-limb divisor: Knuth Algorithm D (using kEff significant limbs)
-        if (m < kEff) {
-            quotient = new uint256[](1);
-            for (uint256 i = 0; i < m; i++) rem[i] = dividend[i];
-            return (quotient, rem);
-        }
-        uint256 numQlimbs = m - kEff + 1;
-        quotient = new uint256[](numQlimbs);
-
-        uint256[] memory u = new uint256[](m + 1);
-        assembly {
-            mcopy(add(u, 0x20), add(dividend, 0x20), mul(m, 0x20))
-        }
-
-        // Normalize: shift divisor so top limb has high bit set
-        uint256 topD = divisor[kEff - 1];
-        uint256 shift = 0;
-        {
-            uint256 tmp = topD;
-            while (tmp < (1 << 255)) {
-                tmp <<= 1;
-                shift++;
-            }
-        }
-
-        uint256[] memory v = new uint256[](kEff);
-        if (shift > 0) {
-            uint256 carry = 0;
-            for (uint256 i = 0; i < kEff; i++) {
-                uint256 newVal = (divisor[i] << shift) | carry;
-                carry = divisor[i] >> (256 - shift);
-                v[i] = newVal;
-            }
-            carry = 0;
-            for (uint256 i = 0; i < m; i++) {
-                uint256 newVal = (u[i] << shift) | carry;
-                carry = u[i] >> (256 - shift);
-                u[i] = newVal;
-            }
-            u[m] = carry;
-        } else {
-            assembly {
-                mcopy(add(v, 0x20), add(divisor, 0x20), mul(kEff, 0x20))
-            }
-        }
-
-        uint256 vTop = v[kEff - 1];
-
-        for (uint256 jj = numQlimbs; jj > 0;) {
-            unchecked { jj--; }
-            uint256 uHi = u[jj + kEff];
-            uint256 uLo = u[jj + kEff - 1];
-
-            uint256 qHat;
-            {
-                uint256 rHat;
-                bool doRefinement;
-                if (uHi >= vTop) {
-                    qHat = type(uint256).max;
-                    rHat = uLo + vTop;
-                    doRefinement = (rHat >= uLo); // false if rHat overflowed
-                } else {
-                    (qHat, rHat) = _div512by256(uHi, uLo, vTop);
-                    doRefinement = true;
-                }
-
-                // Knuth Algorithm D refinement: ensure qHat <= q + 1
-                // Check: qHat * v[kEff-2] > rHat * b + u[jj + kEff - 2]
-                if (doRefinement && kEff >= 2) {
-                    uint256 vSecond = v[kEff - 2];
-                    uint256 uSecond = u[jj + kEff - 2];
-                    assembly {
-                        let qvLo := mul(qHat, vSecond)
-                        let qvMM := mulmod(qHat, vSecond, not(0))
-                        let qvHi := sub(sub(qvMM, qvLo), lt(qvMM, qvLo))
-
-                        for {} or(gt(qvHi, rHat), and(eq(qvHi, rHat), gt(qvLo, uSecond))) {} {
-                            qHat := sub(qHat, 1)
-                            rHat := add(rHat, vTop)
-                            if lt(rHat, vTop) { break }
-                            qvLo := mul(qHat, vSecond)
-                            qvMM := mulmod(qHat, vSecond, not(0))
-                            qvHi := sub(sub(qvMM, qvLo), lt(qvMM, qvLo))
-                        }
-                    }
-                }
-            }
-            bool negative;
-            assembly {
-                let uP := add(u, 0x20)
-                let vP := add(v, 0x20)
-                let carry := 0
-                let borrow := 0
-
-                for { let i := 0 } lt(i, kEff) { i := add(i, 1) } {
-                    let vi := mload(add(vP, mul(i, 0x20)))
-                    let pLo := mul(qHat, vi)
-                    let pMM := mulmod(qHat, vi, not(0))
-                    let pH := sub(sub(pMM, pLo), lt(pMM, pLo))
-
-                    let withCarry := add(pLo, carry)
-                    let newCarry := add(pH, lt(withCarry, pLo))
-                    carry := newCarry
-
-                    let uOff := add(uP, mul(add(jj, i), 0x20))
-                    let uVal := mload(uOff)
-                    let diff := sub(uVal, withCarry)
-                    let newBorrow := lt(uVal, withCarry)
-                    let diff2 := sub(diff, borrow)
-                    newBorrow := or(newBorrow, lt(diff, borrow))
-                    borrow := newBorrow
-                    mstore(uOff, diff2)
-                }
-
-                let uTopOff := add(uP, mul(add(jj, kEff), 0x20))
-                let uTopVal := mload(uTopOff)
-                let diff := sub(uTopVal, carry)
-                let nb := lt(uTopVal, carry)
-                let diff2 := sub(diff, borrow)
-                nb := or(nb, lt(diff, borrow))
-                mstore(uTopOff, diff2)
-                negative := nb
-            }
-
-            if (negative) {
-                qHat--;
-                assembly {
-                    let uP := add(u, 0x20)
-                    let vP := add(v, 0x20)
-                    let carry := 0
-                    for { let i := 0 } lt(i, kEff) { i := add(i, 1) } {
-                        let uOff := add(uP, mul(add(jj, i), 0x20))
-                        let s := add(mload(uOff), mload(add(vP, mul(i, 0x20))))
-                        let c1 := lt(s, mload(uOff))
-                        let s2 := add(s, carry)
-                        let c2 := lt(s2, s)
-                        mstore(uOff, s2)
-                        carry := or(c1, c2)
-                    }
-                    let uTopOff := add(uP, mul(add(jj, kEff), 0x20))
-                    mstore(uTopOff, add(mload(uTopOff), carry))
-                }
-            }
-
-            quotient[jj] = qHat;
-        }
-
-        // Extract remainder from u[0..kEff-1] and denormalize (shift right)
-        if (shift > 0) {
-            for (uint256 i = 0; i < kEff; i++) {
-                rem[i] = u[i] >> shift;
-                if (i + 1 < kEff) {
-                    rem[i] |= u[i + 1] << (256 - shift);
-                }
-            }
-        } else {
-            for (uint256 i = 0; i < kEff; i++) {
-                rem[i] = u[i];
-            }
-        }
     }
 
     // ── Schoolbook multiplication ─────────────────────────────────────
@@ -482,7 +136,6 @@ library ModexpBarrett {
         uint256 q1Len = k + 2;
         uint256[] memory q1 = new uint256[](q1Len);
         {
-            // Copy min(q1Len, 2k - (k-1)) = min(k+2, k+1) = k+1 limbs from product[k-1..]
             uint256 copyLen = k + 1;
             assembly {
                 mcopy(
@@ -516,7 +169,7 @@ library ModexpBarrett {
         // Step 5: r1 = product mod 2^(256*(k+1)) — bottom k+1 limbs
         uint256 rLen = k + 1;
 
-        // Step 6: r2 = (q3 * n) mod 2^(256*(k+1)) — bottom k+1 limbs
+        // Step 6: r2 = (q3 * n) mod 2^(256*(k+1)) — truncated multiply
         uint256[] memory r2 = new uint256[](rLen);
         assembly {
             let q3P := add(q3, 0x20)
@@ -560,6 +213,7 @@ library ModexpBarrett {
             let resP := add(result, 0x20)
             let nP := add(n, 0x20)
 
+            // Subtract r2 from product[0..k] into r2 (in-place reuse)
             let borrow := 0
             for { let i := 0 } lt(i, rLen) { i := add(i, 1) } {
                 let pi := mload(add(pP, mul(i, 0x20)))
@@ -572,11 +226,9 @@ library ModexpBarrett {
                 mstore(add(r2P, mul(i, 0x20)), d2)
             }
 
-            // Correct: subtract n at most twice
-            for { let iter := 0 } lt(iter, 3) { iter := add(iter, 1) } {
-                let topR := mload(add(r2P, mul(k, 0x20)))
-                let geq := 0
-                if gt(topR, 0) { geq := 1 }
+            // Correct: subtract n at most twice (Barrett guarantee)
+            for { let iter := 0 } lt(iter, 2) { iter := add(iter, 1) } {
+                let geq := gt(mload(add(r2P, mul(k, 0x20))), 0)
                 if iszero(geq) {
                     geq := 1
                     for { let i := k } gt(i, 0) {} {
@@ -588,11 +240,8 @@ library ModexpBarrett {
                     }
                 }
 
-                if iszero(geq) {
-                    mcopy(resP, r2P, mul(k, 0x20))
-                    iter := 3
-                }
-                if gt(geq, 0) {
+                if iszero(geq) { iter := 2 }
+                if geq {
                     let brw := 0
                     for { let i := 0 } lt(i, rLen) { i := add(i, 1) } {
                         let rOff := add(r2P, mul(i, 0x20))
@@ -608,6 +257,9 @@ library ModexpBarrett {
                     }
                 }
             }
+
+            // Copy final result
+            mcopy(resP, r2P, mul(k, 0x20))
         }
     }
 
@@ -652,21 +304,14 @@ library ModexpBarrett {
             for (uint256 bit = highBit + 1; bit > 0;) {
                 unchecked { bit--; }
                 assembly { mstore(0x40, freeMemBase) }
-                _copyLimbs(_barrettMulMod(r, r, n, mu, k), r, k);
+                LimbMath.copyLimbs(_barrettMulMod(r, r, n, mu, k), r, k);
                 if ((b >> bit) & 1 == 1) {
                     assembly { mstore(0x40, freeMemBase) }
-                    _copyLimbs(_barrettMulMod(r, a, n, mu, k), r, k);
+                    LimbMath.copyLimbs(_barrettMulMod(r, a, n, mu, k), r, k);
                 }
             }
         }
 
         return r;
-    }
-
-    /// @dev Copy `len` limbs from `src` into `dst` (in-place overwrite).
-    function _copyLimbs(uint256[] memory src, uint256[] memory dst, uint256 len) private pure {
-        assembly {
-            mcopy(add(dst, 0x20), add(src, 0x20), mul(len, 0x20))
-        }
     }
 }
