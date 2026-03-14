@@ -28,7 +28,23 @@ library ModexpMontgomery {
 
         // Convert inputs to little-endian limb arrays
         uint256[] memory n = LimbMath.bytesToLimbs(modulus, k);
-        uint256[] memory a = LimbMath.reduceBase(base, n, k);
+
+        // Fast path: skip schoolbook division when base already fits and base < n
+        uint256[] memory a;
+        {
+            uint256 baseLen = base.length;
+            uint256 baseK = (baseLen + 31) / 32;
+            if (baseK <= k) {
+                uint256[] memory baseLimbs = LimbMath.bytesToLimbs(base, k);
+                if (_limbsLt(baseLimbs, n, k)) {
+                    a = baseLimbs;
+                } else {
+                    a = LimbMath.schoolbookRem(baseLimbs, k, n, k);
+                }
+            } else {
+                a = LimbMath.reduceBase(base, n, k);
+            }
+        }
 
         // Montgomery constants
         uint256 n0inv = _computeN0inv(n[0]);
@@ -38,15 +54,26 @@ library ModexpMontgomery {
         uint256[] memory one = new uint256[](k);
         one[0] = 1;
 
-        // Convert to Montgomery domain: aM = a*R mod n, rM = 1*R mod n
+        // Convert base to Montgomery domain
         uint256[] memory aM = _montMul(a, r2, n, n0inv, k);
-        uint256[] memory rM = _montMul(one, r2, n, n0inv, k);
 
-        // Square-and-multiply exponentiation (left-to-right binary)
-        rM = _modexpLoop(rM, aM, exponent, n, n0inv, k);
-
-        // Convert out of Montgomery domain: result = rM * R^{-1} mod n
-        uint256[] memory res = _montMul(rM, one, n, n0inv, k);
+        // Fast paths for common RSA exponents (skip generic loop + rM setup)
+        uint256 expSmall = _exponentToUint(exponent);
+        uint256[] memory res;
+        if (expSmall == 65537) {
+            // e = 2^16 + 1: square 16 times, then multiply by base
+            uint256[] memory rM = _fastExp65537(aM, n, n0inv, k);
+            res = _montMul(rM, one, n, n0inv, k);
+        } else if (expSmall == 3 || expSmall == 1) {
+            // e = 3: square once, multiply by base; e = 1: identity
+            uint256[] memory rM = expSmall == 3 ? _fastExp3(aM, n, n0inv, k) : aM;
+            res = _montMul(rM, one, n, n0inv, k);
+        } else {
+            // Generic path
+            uint256[] memory rM = _montMul(one, r2, n, n0inv, k);
+            rM = _modexpLoop(rM, aM, exponent, n, n0inv, k);
+            res = _montMul(rM, one, n, n0inv, k);
+        }
 
         LimbMath.limbsToBytes(res, result, modLen);
     }
@@ -72,6 +99,18 @@ library ModexpMontgomery {
         uint256[] memory dividend = new uint256[](dLen);
         dividend[2 * k] = 1;
         return LimbMath.schoolbookRem(dividend, dLen, n, k);
+    }
+
+    /// @dev Returns true if a < b (both k-limb little-endian arrays).
+    function _limbsLt(uint256[] memory a, uint256[] memory b, uint256 k)
+        private pure returns (bool)
+    {
+        for (uint256 i = k; i > 0;) {
+            unchecked { i--; }
+            if (a[i] < b[i]) return true;
+            if (a[i] > b[i]) return false;
+        }
+        return false; // equal
     }
 
     // ── Square-and-multiply ───────────────────────────────────────────
@@ -110,7 +149,7 @@ library ModexpMontgomery {
         // Process first non-zero byte (from topBit down to bit 0)
         for (uint256 bit = topBit;;) {
             assembly { mstore(0x40, freeMemBase) }
-            LimbMath.copyLimbs(_montMul(rM, rM, n, n0inv, k), rM, k); // square
+            LimbMath.copyLimbs(_montSqr(rM, n, n0inv, k), rM, k); // square
             if ((b >> bit) & 1 == 1) {
                 assembly { mstore(0x40, freeMemBase) }
                 LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k); // multiply
@@ -125,7 +164,7 @@ library ModexpMontgomery {
             for (uint256 bit = 8; bit > 0;) {
                 unchecked { bit--; }
                 assembly { mstore(0x40, freeMemBase) }
-                LimbMath.copyLimbs(_montMul(rM, rM, n, n0inv, k), rM, k); // square
+                LimbMath.copyLimbs(_montSqr(rM, n, n0inv, k), rM, k); // square
                 if ((b >> bit) & 1 == 1) {
                     assembly { mstore(0x40, freeMemBase) }
                     LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k); // multiply
@@ -136,10 +175,244 @@ library ModexpMontgomery {
         return rM;
     }
 
+    // ── Fast-path exponentiation for common RSA exponents ─────────────
+
+    /// @dev Extracts exponent as uint256, or returns 0 if > 32 bytes.
+    function _exponentToUint(bytes memory exponent) private pure returns (uint256 v) {
+        uint256 len = exponent.length;
+        if (len == 0 || len > 32) return 0;
+        assembly {
+            v := shr(mul(sub(32, len), 8), mload(add(exponent, 0x20)))
+        }
+    }
+
+    /// @dev b^65537 in Montgomery domain. e = 2^16 + 1: square 16 times, multiply once.
+    function _fastExp65537(
+        uint256[] memory aM,
+        uint256[] memory n,
+        uint256 n0inv,
+        uint256 k
+    ) private pure returns (uint256[] memory rM) {
+        rM = new uint256[](k);
+        LimbMath.copyLimbs(aM, rM, k);
+        uint256 freeMemBase;
+        assembly { freeMemBase := mload(0x40) }
+        for (uint256 i = 0; i < 16; i++) {
+            assembly { mstore(0x40, freeMemBase) }
+            LimbMath.copyLimbs(_montSqr(rM, n, n0inv, k), rM, k);
+        }
+        assembly { mstore(0x40, freeMemBase) }
+        LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k);
+    }
+
+    /// @dev b^3 in Montgomery domain. e = 2 + 1: square once, multiply once.
+    function _fastExp3(
+        uint256[] memory aM,
+        uint256[] memory n,
+        uint256 n0inv,
+        uint256 k
+    ) private pure returns (uint256[] memory rM) {
+        rM = new uint256[](k);
+        uint256 freeMemBase;
+        assembly { freeMemBase := mload(0x40) }
+        LimbMath.copyLimbs(_montSqr(aM, n, n0inv, k), rM, k);
+        assembly { mstore(0x40, freeMemBase) }
+        LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k);
+    }
+
+    // ── Montgomery squaring (SOS) ───────────────────────────────────
+
+    /// @dev Computes a² * R⁻¹ mod n using Separated Operand Scanning.
+    ///      Exploits a*a symmetry: upper triangle + double + diagonal = half the multiplies.
+    function _montSqr(
+        uint256[] memory a,
+        uint256[] memory n,
+        uint256 n0inv,
+        uint256 k
+    ) private pure returns (uint256[] memory res) {
+        res = new uint256[](k);
+
+        assembly {
+            let aP := add(a, 0x20)
+            let nP := add(n, 0x20)
+            let resP := add(res, 0x20)
+            let kWords := mul(k, 0x20)
+            let k2p1 := add(mul(k, 2), 1)
+
+            // Allocate and zero scratch s[0..2k] (2k+1 words)
+            let sP := mload(0x40)
+            let sEnd := add(sP, mul(k2p1, 0x20))
+            mstore(0x40, sEnd)
+            for { let p := sP } lt(p, sEnd) { p := add(p, 0x20) } {
+                mstore(p, 0)
+            }
+
+            // ── Step 1a: Off-diagonal (upper triangle) ──
+            // For i < j: accumulate a[i]*a[j] into s[i+j]
+            {
+                let aOff_i := aP
+                for { let i := 0 } lt(i, k) { i := add(i, 1) } {
+                    let ai := mload(aOff_i)
+                    let carry := 0
+                    let aOff_j := add(aOff_i, 0x20)
+                    let sOff := add(sP, mul(add(mul(2, i), 1), 0x20))
+
+                    for { let j := add(i, 1) } lt(j, k) { j := add(j, 1) } {
+                        let aj := mload(aOff_j)
+
+                        let lo := mul(ai, aj)
+                        let mmr := mulmod(ai, aj, not(0))
+                        let hi := sub(sub(mmr, lo), lt(mmr, lo))
+
+                        let s1 := add(lo, mload(sOff))
+                        let c1 := lt(s1, lo)
+                        let s2 := add(s1, carry)
+                        mstore(sOff, s2)
+                        carry := add(hi, add(c1, lt(s2, s1)))
+
+                        sOff := add(sOff, 0x20)
+                        aOff_j := add(aOff_j, 0x20)
+                    }
+                    mstore(sOff, carry)
+
+                    aOff_i := add(aOff_i, 0x20)
+                }
+            }
+
+            // ── Step 1b: Double (left shift by 1 bit) ──
+            {
+                let carry := 0
+                let sOff := sP
+                for { let i := 0 } lt(i, k2p1) { i := add(i, 1) } {
+                    let val := mload(sOff)
+                    mstore(sOff, or(shl(1, val), carry))
+                    carry := shr(255, val)
+                    sOff := add(sOff, 0x20)
+                }
+            }
+
+            // ── Step 1c: Add diagonal a[i]² into s[2i..2i+1] ──
+            {
+                let aOff := aP
+                let sOff := sP
+                for { let i := 0 } lt(i, k) { i := add(i, 1) } {
+                    let ai := mload(aOff)
+
+                    let lo := mul(ai, ai)
+                    let mmr := mulmod(ai, ai, not(0))
+                    let hi := sub(sub(mmr, lo), lt(mmr, lo))
+
+                    let s2i := mload(sOff)
+                    let sum1 := add(s2i, lo)
+                    let c1 := lt(sum1, s2i)
+                    mstore(sOff, sum1)
+
+                    let sOff1 := add(sOff, 0x20)
+                    let s2i1 := mload(sOff1)
+                    let sum2 := add(s2i1, hi)
+                    let c2 := lt(sum2, s2i1)
+                    let sum3 := add(sum2, c1)
+                    let c3 := lt(sum3, sum2)
+                    mstore(sOff1, sum3)
+
+                    // Propagate carry
+                    let carry := add(c2, c3)
+                    let propOff := add(sOff1, 0x20)
+                    for {} gt(carry, 0) {} {
+                        let val := mload(propOff)
+                        let newVal := add(val, carry)
+                        carry := lt(newVal, val)
+                        mstore(propOff, newVal)
+                        propOff := add(propOff, 0x20)
+                    }
+
+                    sOff := add(sOff, 0x40)
+                    aOff := add(aOff, 0x20)
+                }
+            }
+
+            // ── Step 2: Montgomery reduction (no shift, advance base) ──
+            {
+                let sBase := sP
+                for { let i := 0 } lt(i, k) { i := add(i, 1) } {
+                    let m := mul(mload(sBase), n0inv)
+                    let carry := 0
+                    let sOff := sBase
+                    let nOff := nP
+
+                    for { let j := 0 } lt(j, k) { j := add(j, 1) } {
+                        let nj := mload(nOff)
+                        let lo := mul(m, nj)
+                        let mmr := mulmod(m, nj, not(0))
+                        let hi := sub(sub(mmr, lo), lt(mmr, lo))
+
+                        let s1 := add(lo, mload(sOff))
+                        let c1 := lt(s1, lo)
+                        let s2 := add(s1, carry)
+                        let c2 := lt(s2, s1)
+                        mstore(sOff, s2)
+                        carry := add(hi, add(c1, c2))
+
+                        sOff := add(sOff, 0x20)
+                        nOff := add(nOff, 0x20)
+                    }
+
+                    // Propagate carry into s[i+k..2k]
+                    for {} gt(carry, 0) {} {
+                        let val := mload(sOff)
+                        let newVal := add(val, carry)
+                        carry := lt(newVal, val)
+                        mstore(sOff, newVal)
+                        sOff := add(sOff, 0x20)
+                    }
+
+                    sBase := add(sBase, 0x20)
+                }
+
+                // ── Final conditional subtraction ──
+                // Result is in s[k..2k-1], sBase points to s[k]
+                {
+                    let s2kOff := add(sP, mul(mul(k, 2), 0x20))
+                    let doSub := gt(mload(s2kOff), 0)
+
+                    if iszero(doSub) {
+                        doSub := 1
+                        for { let i := k } gt(i, 0) {} {
+                            i := sub(i, 1)
+                            let sL := mload(add(sBase, mul(i, 0x20)))
+                            let nL := mload(add(nP, mul(i, 0x20)))
+                            if gt(sL, nL) { i := 0 }
+                            if lt(sL, nL) { doSub := 0 i := 0 }
+                        }
+                    }
+
+                    mcopy(resP, sBase, kWords)
+
+                    if doSub {
+                        let borrow := 0
+                        let rOff := resP
+                        let nOff := nP
+                        let rEnd := add(resP, kWords)
+                        for {} lt(rOff, rEnd) {} {
+                            let rL := mload(rOff)
+                            let nL := mload(nOff)
+                            let d := sub(rL, nL)
+                            let nb := lt(rL, nL)
+                            let d2 := sub(d, borrow)
+                            borrow := or(nb, lt(d, borrow))
+                            mstore(rOff, d2)
+                            rOff := add(rOff, 0x20)
+                            nOff := add(nOff, 0x20)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── Montgomery multiplication (CIOS) ──────────────────────────────
 
     /// @dev Computes a * b * R^{-1} mod n using CIOS (Coarsely Integrated Operand Scanning).
-    ///      This is the only assembly-heavy function — the innermost hot loop.
     function _montMul(
         uint256[] memory a,
         uint256[] memory b,
