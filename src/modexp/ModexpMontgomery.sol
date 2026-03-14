@@ -177,12 +177,19 @@ library ModexpMontgomery {
 
     // ── Fast-path exponentiation for common RSA exponents ─────────────
 
-    /// @dev Extracts exponent as uint256, or returns 0 if > 32 bytes.
+    /// @dev Extracts exponent as uint256 (stripping leading zeros), or returns 0 if > 32 significant bytes.
     function _exponentToUint(bytes memory exponent) private pure returns (uint256 v) {
         uint256 len = exponent.length;
-        if (len == 0 || len > 32) return 0;
+        if (len == 0) return 0;
+        // Skip leading zero bytes
+        uint256 start = 0;
+        while (start < len && exponent[start] == 0) {
+            start++;
+        }
+        uint256 sigLen = len - start;
+        if (sigLen == 0 || sigLen > 32) return 0;
         assembly {
-            v := shr(mul(sub(32, len), 8), mload(add(exponent, 0x20)))
+            v := shr(mul(sub(32, sigLen), 8), mload(add(add(exponent, 0x20), start)))
         }
     }
 
