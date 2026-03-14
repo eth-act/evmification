@@ -23,6 +23,7 @@ library LimbMath {
     }
 
     function isOneBytes(bytes memory b) internal pure returns (bool z) {
+        if (b.length == 0) return false;
         assembly {
             let len := mload(b)
             let ptr := add(b, 0x20)

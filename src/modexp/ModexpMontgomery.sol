@@ -218,20 +218,7 @@ library ModexpMontgomery {
         LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k);
     }
 
-    /// @dev b^3 in Montgomery domain. e = 2 + 1: square once, multiply once.
-    function _fastExp3(
-        uint256[] memory aM,
-        uint256[] memory n,
-        uint256 n0inv,
-        uint256 k
-    ) private pure returns (uint256[] memory rM) {
-        rM = new uint256[](k);
-        uint256 freeMemBase;
-        assembly { freeMemBase := mload(0x40) }
-        LimbMath.copyLimbs(_montSqr(aM, n, n0inv, k), rM, k);
-        assembly { mstore(0x40, freeMemBase) }
-        LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k);
-    }
+
 
     // ── Montgomery squaring (SOS) ───────────────────────────────────
 
