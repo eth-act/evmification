@@ -6,7 +6,7 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
 ]
 via_ir = true  # Needed for ModexpMontgomery (Solidity-heavy code)
-evm_version = "prague"
+evm_version = "osaka"
 fs_permissions = [
     { access = "read", path = "test/modexp/fixtures" },
     { access = "read", path = "test/blake2f/fixtures" },
