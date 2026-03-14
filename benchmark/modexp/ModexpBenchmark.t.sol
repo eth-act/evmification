@@ -96,6 +96,20 @@ contract ModexpBenchmarkTest is Test {
         caller.modexp(BASE_4096, E, N_4096);
     }
 
+
+
+    function test_modexp_deployed_1024() public view {
+        deployedCaller.call(BASE_1024, E, N_1024);
+    }
+
+    function test_modexp_deployed_2048() public view {
+        deployedCaller.call(BASE_2048, E, N_2048);
+    }
+
+    function test_modexp_deployed_4096() public view {
+        deployedCaller.call(BASE_4096, E, N_4096);
+    }
+
     function test_modexp_montgomery_2048() public view {
         montgomeryCaller.modexp(BASE_2048, E, N_2048);
     }
