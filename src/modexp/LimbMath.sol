@@ -354,6 +354,49 @@ library LimbMath {
         return schoolbookRem(baseLimbs, baseK, n, k);
     }
 
+    // ── Multiplication ──────────────────────────────────────────────
+
+    /// @dev Schoolbook multiplication: result = a[0..aLen-1] * b[0..bLen-1].
+    ///      Result is (aLen + bLen) limbs.
+    function schoolbookMul(
+        uint256[] memory a,
+        uint256 aLen,
+        uint256[] memory b,
+        uint256 bLen
+    ) internal pure returns (uint256[] memory result) {
+        uint256 rLen = aLen + bLen;
+        result = new uint256[](rLen);
+
+        assembly {
+            let aP := add(a, 0x20)
+            let bP := add(b, 0x20)
+            let resP := add(result, 0x20)
+
+            for { let i := 0 } lt(i, aLen) { i := add(i, 1) } {
+                let ai := mload(add(aP, mul(i, 0x20)))
+                if gt(ai, 0) {
+                    let carry := 0
+                    for { let j := 0 } lt(j, bLen) { j := add(j, 1) } {
+                        let rOff := add(resP, mul(add(i, j), 0x20))
+                        let bj := mload(add(bP, mul(j, 0x20)))
+
+                        let lo := mul(ai, bj)
+                        let mmr := mulmod(ai, bj, not(0))
+                        let hi := sub(sub(mmr, lo), lt(mmr, lo))
+
+                        let s1 := add(lo, mload(rOff))
+                        let c1 := lt(s1, lo)
+                        let s2 := add(s1, carry)
+                        mstore(rOff, s2)
+                        carry := add(hi, add(c1, lt(s2, s1)))
+                    }
+                    let rOff := add(resP, mul(add(i, bLen), 0x20))
+                    mstore(rOff, add(mload(rOff), carry))
+                }
+            }
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────
 
     /// @dev Count leading zeros of a nonzero uint256 using binary search (8 steps vs 255 worst case).

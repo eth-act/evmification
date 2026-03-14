@@ -106,6 +106,32 @@ contract ModexpBenchmarkTest is Test {
         caller.modexp(BASE_3072, E, N_3072);
     }
 
+    function test_modexp_precompile_1024_e3() public view {
+        caller.modexp(BASE_1024, hex"03", N_1024);
+    }
+    function test_modexp_precompile_2048_e3() public view {
+        caller.modexp(BASE_2048, hex"03", N_2048);
+    }
+    function test_modexp_precompile_3072_e3() public view {
+        caller.modexp(BASE_3072, hex"03", N_3072);
+    }
+    function test_modexp_precompile_4096_e3() public view {
+        caller.modexp(BASE_4096, hex"03", N_4096);
+    }
+
+    function test_modexp_deployed_1024_e3() public view {
+        deployedCaller.call(BASE_1024, hex"03", N_1024);
+    }
+    function test_modexp_deployed_2048_e3() public view {
+        deployedCaller.call(BASE_2048, hex"03", N_2048);
+    }
+    function test_modexp_deployed_3072_e3() public view {
+        deployedCaller.call(BASE_3072, hex"03", N_3072);
+    }
+    function test_modexp_deployed_4096_e3() public view {
+        deployedCaller.call(BASE_4096, hex"03", N_4096);
+    }
+
     function test_modexp_deployed_3072() public view {
         deployedCaller.call(BASE_3072, E, N_3072);
     }

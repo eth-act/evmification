@@ -46,33 +46,39 @@ library ModexpMontgomery {
             }
         }
 
-        // Montgomery constants
-        uint256 n0inv = _computeN0inv(n[0]);
-        uint256[] memory r2 = _computeR2ModN(k, n);
-
-        // one = 1 as a k-limb number
-        uint256[] memory one = new uint256[](k);
-        one[0] = 1;
-
-        // Convert base to Montgomery domain
-        uint256[] memory aM = _montMul(a, r2, n, n0inv, k);
-
-        // Fast paths for common RSA exponents (skip generic loop + rM setup)
+        // Check exponent early — small exponents can skip Montgomery setup entirely
         uint256 expSmall = _exponentToUint(exponent);
         uint256[] memory res;
-        if (expSmall == 65537) {
-            // e = 2^16 + 1: square 16 times, then multiply by base
-            uint256[] memory rM = _fastExp65537(aM, n, n0inv, k);
-            res = _montMul(rM, one, n, n0inv, k);
-        } else if (expSmall == 3 || expSmall == 1) {
-            // e = 3: square once, multiply by base; e = 1: identity
-            uint256[] memory rM = expSmall == 3 ? _fastExp3(aM, n, n0inv, k) : aM;
-            res = _montMul(rM, one, n, n0inv, k);
+
+        if (expSmall == 1) {
+            // e = 1: result is just base mod n (already reduced)
+            res = a;
+        } else if (expSmall == 3) {
+            // e = 3: direct schoolbook multiply, no Montgomery overhead
+            // base² mod n
+            uint256[] memory a2 = LimbMath.schoolbookRem(
+                LimbMath.schoolbookMul(a, k, a, k), 2 * k, n, k
+            );
+            // base³ = base² × base mod n
+            res = LimbMath.schoolbookRem(
+                LimbMath.schoolbookMul(a2, k, a, k), 2 * k, n, k
+            );
         } else {
-            // Generic path
-            uint256[] memory rM = _montMul(one, r2, n, n0inv, k);
-            rM = _modexpLoop(rM, aM, exponent, n, n0inv, k);
-            res = _montMul(rM, one, n, n0inv, k);
+            // Montgomery path — worth the setup cost for larger exponents
+            uint256 n0inv = _computeN0inv(n[0]);
+            uint256[] memory r2 = _computeR2ModN(k, n);
+            uint256[] memory one = new uint256[](k);
+            one[0] = 1;
+            uint256[] memory aM = _montMul(a, r2, n, n0inv, k);
+
+            if (expSmall == 65537) {
+                uint256[] memory rM = _fastExp65537(aM, n, n0inv, k);
+                res = _montMul(rM, one, n, n0inv, k);
+            } else {
+                uint256[] memory rM = _montMul(one, r2, n, n0inv, k);
+                rM = _modexpLoop(rM, aM, exponent, n, n0inv, k);
+                res = _montMul(rM, one, n, n0inv, k);
+            }
         }
 
         LimbMath.limbsToBytes(res, result, modLen);
