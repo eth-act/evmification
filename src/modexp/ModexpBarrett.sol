@@ -133,7 +133,13 @@ library ModexpBarrett {
             let nP := add(n, 0x20)
             let r2P := add(r2, 0x20)
 
-            for { let i := 0 } lt(i, q3Len) { i := add(i, 1) } {
+            // Cap loop to rLen: q3 has k+3 limbs but only 0..k are nonzero
+            // (quotient estimate < 2^{256(k+1)}), so the OOB path is unreachable
+            // in practice. This cap is purely defensive — without it, sub(rLen, i)
+            // would underflow for i > rLen, and the inner loop would write past r2.
+            let q3Cap := q3Len
+            if gt(q3Cap, rLen) { q3Cap := rLen }
+            for { let i := 0 } lt(i, q3Cap) { i := add(i, 1) } {
                 let qi := mload(add(q3P, mul(i, 0x20)))
                 if gt(qi, 0) {
                     let carry := 0

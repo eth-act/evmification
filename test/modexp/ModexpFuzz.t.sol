@@ -331,7 +331,51 @@ contract ModexpFuzzTest is Test {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // 9. Structured fuzz: dispatcher consistency (same inputs, both paths)
+    // 9. Barrett bounds stress: moduli with tiny top limb (maximizes mu)
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// @notice When the modulus top limb is tiny (e.g., 0x01), the Barrett
+    ///         constant mu ≈ 2^{256(k+1)} is maximal. This maximizes q3
+    ///         (the quotient estimate), stressing the truncated-multiply
+    ///         loop bounds in _barrettMulMod Step 6.
+    function testFuzz_barrett_tiny_top_limb(
+        uint256 baseSeed,
+        uint256 expVal,
+        uint8 sizeChoice,
+        uint256 modSeed
+    ) public view {
+        // Multi-limb even moduli: 33 bytes (2 limbs), 34 bytes (2 limbs), 65 bytes (3 limbs)
+        uint256[3] memory byteLens = [uint256(33), 34, 65];
+        uint256 byteLen = byteLens[uint256(sizeChoice) % 3];
+
+        // Build modulus with a tiny first byte (0x01) to minimize the top limb
+        bytes memory mod_ = new bytes(byteLen);
+        mod_[0] = 0x01;
+        for (uint256 i = 1; i < byteLen; i++) {
+            mod_[i] = bytes1(uint8(uint256(keccak256(abi.encodePacked(modSeed, i)))));
+        }
+        // Force even (Barrett path)
+        mod_[byteLen - 1] = bytes1(uint8(mod_[byteLen - 1]) & 0xFE);
+        if (uint8(mod_[byteLen - 1]) == 0) mod_[byteLen - 1] = bytes1(uint8(0x02));
+
+        // Base nearly as large as mod (maximizes the product a*b in Barrett)
+        bytes memory base = new bytes(byteLen);
+        for (uint256 i = 0; i < byteLen; i++) {
+            base[i] = mod_[i]; // start equal to mod
+        }
+        // Subtract a small random amount so base < mod
+        base[byteLen - 1] = bytes1(uint8(uint256(keccak256(abi.encodePacked(baseSeed))) % 256));
+
+        expVal = bound(expVal, 2, 5000);
+        bytes memory exp = _toMinBytes(expVal);
+
+        bytes memory expected = _evmModexp(base, exp, mod_);
+        bytes memory actual = barrettRunner.run(base, exp, mod_);
+        assertEq(actual, expected, "barrett tiny top limb mismatch");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 10. Structured fuzz: dispatcher consistency (same inputs, both paths)
     // ══════════════════════════════════════════════════════════════════════
 
     /// @notice Same base/exp but test with modulus and modulus+1 to hit both paths.
