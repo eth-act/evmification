@@ -40,6 +40,74 @@ library LimbMath {
         }
     }
 
+    // ── Single-word (k == 1) fast path ────────────────────────────────
+
+    /// @dev Big-endian bytes (length ≤ 32) to uint256.
+    function bytesToWord(bytes memory b) internal pure returns (uint256 v) {
+        assembly {
+            v := shr(mul(sub(0x20, mload(b)), 8), mload(add(b, 0x20)))
+        }
+    }
+
+    /// @dev Single-word-modulus modexp writing the big-endian result into the
+    ///      pre-allocated `result` buffer (modulus.length <= 32 bytes, value > 1).
+    function modexpWordInto(
+        bytes memory base,
+        bytes memory exponent,
+        bytes memory modulus,
+        bytes memory result
+    ) internal pure {
+        uint256 r = modexpWord(base, exponent, bytesToWord(modulus));
+        uint256 modLen = modulus.length;
+        assembly {
+            mstore(0x00, r)
+            mcopy(add(result, 0x20), sub(0x20, modLen), modLen)
+        }
+    }
+
+    /// @dev Full modexp with a single-word modulus using native mulmod.
+    ///      Requires m > 1. Handles arbitrary-length base and exponent.
+    function modexpWord(bytes memory base, bytes memory exponent, uint256 m)
+        internal pure returns (uint256 r)
+    {
+        assembly {
+            // ── Reduce base mod m, folding in 32-byte big-endian chunks ──
+            let b := 0
+            {
+                let len := mload(base)
+                let ptr := add(base, 0x20)
+                let rem := mod(len, 0x20)
+                if rem {
+                    b := mod(shr(mul(sub(0x20, rem), 8), mload(ptr)), m)
+                    ptr := add(ptr, rem)
+                }
+                let end := add(add(base, 0x20), len)
+                // r256 = 2^256 mod m
+                let r256 := addmod(mod(not(0), m), 1, m)
+                for {} lt(ptr, end) { ptr := add(ptr, 0x20) } {
+                    b := addmod(mulmod(b, r256, m), mload(ptr), m)
+                }
+            }
+
+            // ── Left-to-right square-and-multiply over exponent bytes ──
+            r := 1
+            let eptr := add(exponent, 0x20)
+            let eend := add(eptr, mload(exponent))
+            // Skip leading zero bytes
+            for {} and(lt(eptr, eend), iszero(byte(0, mload(eptr)))) {} {
+                eptr := add(eptr, 1)
+            }
+            for {} lt(eptr, eend) { eptr := add(eptr, 1) } {
+                let bv := byte(0, mload(eptr))
+                for { let bit := 8 } bit {} {
+                    bit := sub(bit, 1)
+                    r := mulmod(r, r, m)
+                    if and(shr(bit, bv), 1) { r := mulmod(r, b, m) }
+                }
+            }
+        }
+    }
+
     // ── Limb conversion ──────────────────────────────────────────────
 
     function bytesToLimbs(bytes memory data, uint256 k) internal pure returns (uint256[] memory limbs) {
@@ -240,22 +308,7 @@ library LimbMath {
                 }
 
                 if (doRefinement && kEff >= 2) {
-                    uint256 vSecond = v[kEff - 2];
-                    uint256 uSecond = u[jj + kEff - 2];
-                    assembly {
-                        let qvLo := mul(qHat, vSecond)
-                        let qvMM := mulmod(qHat, vSecond, not(0))
-                        let qvHi := sub(sub(qvMM, qvLo), lt(qvMM, qvLo))
-
-                        for {} or(gt(qvHi, rHat), and(eq(qvHi, rHat), gt(qvLo, uSecond))) {} {
-                            qHat := sub(qHat, 1)
-                            rHat := add(rHat, vTop)
-                            if lt(rHat, vTop) { break }
-                            qvLo := mul(qHat, vSecond)
-                            qvMM := mulmod(qHat, vSecond, not(0))
-                            qvHi := sub(sub(qvMM, qvLo), lt(qvMM, qvLo))
-                        }
-                    }
+                    qHat = _refineQhat(qHat, rHat, vTop, v[kEff - 2], u[jj + kEff - 2]);
                 }
             }
             bool negative;
@@ -396,6 +449,27 @@ library LimbMath {
                 }
             }
         }
+    }
+
+    /// @dev Knuth Algorithm D qHat refinement: decrement qHat while qHat*vSecond > (rHat:uSecond).
+    function _refineQhat(uint256 qHat, uint256 rHat, uint256 vTop, uint256 vSecond, uint256 uSecond)
+        private pure returns (uint256)
+    {
+        assembly {
+            let qvLo := mul(qHat, vSecond)
+            let qvMM := mulmod(qHat, vSecond, not(0))
+            let qvHi := sub(sub(qvMM, qvLo), lt(qvMM, qvLo))
+
+            for {} or(gt(qvHi, rHat), and(eq(qvHi, rHat), gt(qvLo, uSecond))) {} {
+                qHat := sub(qHat, 1)
+                rHat := add(rHat, vTop)
+                if lt(rHat, vTop) { break }
+                qvLo := mul(qHat, vSecond)
+                qvMM := mulmod(qHat, vSecond, not(0))
+                qvHi := sub(sub(qvMM, qvLo), lt(qvMM, qvLo))
+            }
+        }
+        return qHat;
     }
 
     // ── Private helpers ───────────────────────────────────────────────

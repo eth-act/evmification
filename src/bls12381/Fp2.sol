@@ -30,6 +30,40 @@ library Fp2 {
         return Element(c0, c1);
     }
 
+    /// @notice Copy the value of a into the pre-allocated element dst.
+    /// @dev See Fp.copyInto — used for memory recycling in hot loops.
+    function copyInto(Element memory a, Element memory dst) internal pure {
+        Fp.copyInto(a.c0, dst.c0);
+        Fp.copyInto(a.c1, dst.c1);
+    }
+
+    /// @notice Allocate the 3-element staging area for the park/rewind
+    ///         memory-recycling pattern (see park3).
+    function stage3() internal pure returns (Element[3] memory stage) {
+        stage[0] = zero();
+        stage[1] = zero();
+        stage[2] = zero();
+    }
+
+    /// @notice Park (x, y, z) in the staging buffers and rewind the free memory
+    ///         pointer to memBase, reclaiming a loop iteration's garbage.
+    /// @dev memBase must have been captured AFTER `stage` was allocated, and the
+    ///      returned staged values must replace the caller's locals — the old
+    ///      pointers dangle once the pointer is rewound.
+    function park3(
+        Element[3] memory stage,
+        Element memory x,
+        Element memory y,
+        Element memory z,
+        uint256 memBase
+    ) internal pure returns (Element memory, Element memory, Element memory) {
+        copyInto(x, stage[0]);
+        copyInto(y, stage[1]);
+        copyInto(z, stage[2]);
+        assembly { mstore(0x40, memBase) }
+        return (stage[0], stage[1], stage[2]);
+    }
+
     // ── Arithmetic ────────────────────────────────────────────────────
 
     /// @notice (a + b) in Fp2.

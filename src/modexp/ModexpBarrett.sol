@@ -46,6 +46,12 @@ library ModexpBarrett {
 
         uint256 k = (modLen + 31) / 32;
 
+        // Single-limb modulus: native mulmod square-and-multiply, no limb machinery
+        if (k == 1) {
+            LimbMath.modexpWordInto(base, exponent, modulus, result);
+            return result;
+        }
+
         uint256[] memory n = LimbMath.bytesToLimbs(modulus, k);
         uint256[] memory a = LimbMath.reduceBase(base, n, k);
 
@@ -258,13 +264,13 @@ library ModexpBarrett {
             topBit--;
         }
 
-        // Unified square-and-multiply loop across all exponent bytes
-        bool started = false;
+        // Unified square-and-multiply loop across all exponent bytes.
+        // topBit is the first byte's top set bit, then 7 for all later bytes.
         for (uint256 byteIdx = startByte; byteIdx < expLen; byteIdx++) {
             b = uint8(exponent[byteIdx]);
-            uint256 highBit = started ? 7 : topBit;
-            started = true;
-            for (uint256 bit = highBit + 1; bit > 0;) {
+            uint256 bitCount = topBit + 1;
+            topBit = 7;
+            for (uint256 bit = bitCount; bit > 0;) {
                 unchecked { bit--; }
                 assembly { mstore(0x40, freeMemBase) }
                 LimbMath.copyLimbs(_barrettMulMod(r, r, n, mu, k), r, k);

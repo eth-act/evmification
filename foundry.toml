@@ -6,6 +6,8 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
 ]
 via_ir = true  # Needed for ModexpMontgomery (Solidity-heavy code)
+optimizer = true  # Foundry 1.x defaults this to false; unoptimized via-ir code is ~4x more expensive
+optimizer_runs = 10000
 gas_limit = 9999999999999  # MapFpToG2 cofactor clearing is ~1.3B gas
 evm_version = "osaka"
 fs_permissions = [

@@ -69,9 +69,8 @@ library Sha256 {
 
             // Copy data
             mcopy(padBuf, dataPtr, dataLen)
-            let i := dataLen
             // Zero the rest
-            for { let j := i } lt(j, paddedLen) { j := add(j, 0x20) } {
+            for { let j := dataLen } lt(j, paddedLen) { j := add(j, 0x20) } {
                 mstore(add(padBuf, j), 0)
             }
             // 0x80 byte
@@ -81,9 +80,11 @@ library Sha256 {
             mstore(add(padBuf, sub(paddedLen, 8)), shl(192, bitLen))
 
             // ── Allocate hash state H[0..7] and message schedule in memory ──
+            // W[0..63] lives at hPtr+256. The schedule loops use a block-local
+            // wPtr; the round loop re-derives the address inline so wPtr is not
+            // live across the 64 rounds (stack relief).
             let hPtr := mload(0x40)              // 8 words * 32 bytes = 256 bytes
-            let wPtr := add(hPtr, 256)            // 64 words * 32 bytes = 2048 bytes
-            mstore(0x40, add(wPtr, 2048))
+            mstore(0x40, add(hPtr, 2304))
 
             // Initialize H[0..7]
             mstore(hPtr, 0x6a09e667)
@@ -104,13 +105,13 @@ library Sha256 {
             }
 
             // ── Process each 64-byte block ───────────────────────
-            let numBlocks := div(paddedLen, 64)
-            for { let blk := 0 } lt(blk, numBlocks) { blk := add(blk, 1) } {
-                let blockPtr := add(padBuf, mul(blk, 64))
+            // padBuf walks forward one block at a time; paddedLen counts down.
+            for {} gt(paddedLen, 0) { paddedLen := sub(paddedLen, 64) padBuf := add(padBuf, 64) } {
+                let wPtr := add(hPtr, 256)
 
                 // Prepare W[0..15] from block (big-endian 32-bit words)
                 for { let t := 0 } lt(t, 16) { t := add(t, 1) } {
-                    let off := add(blockPtr, mul(t, 4))
+                    let off := add(padBuf, mul(t, 4))
                     mstore(add(wPtr, mul(t, 0x20)), shr(224, mload(off)))
                 }
 
@@ -132,20 +133,21 @@ library Sha256 {
                 let e := mload(add(hPtr, 0x80))
                 let ff := mload(add(hPtr, 0xa0))
                 let gg := mload(add(hPtr, 0xc0))
-                let hh := mload(add(hPtr, 0xe0))
+                // h lives in scratch memory (0x00) to relieve stack pressure
+                mstore(0x00, mload(add(hPtr, 0xe0)))
 
                 // 64 rounds — state kept in stack locals
                 for { let t := 0 } lt(t, 64) { t := add(t, 1) } {
                     let s1 := and(xor(xor(rotr32(e, 6), rotr32(e, 11)), rotr32(e, 25)), MASK32)
                     let ch := and(xor(and(e, ff), and(not(e), gg)), MASK32)
-                    let wt := mload(add(wPtr, mul(t, 0x20)))
-                    let t1 := and(add(add(add(add(hh, s1), ch), getK(t)), wt), MASK32)
+                    let wt := mload(add(add(hPtr, 256), mul(t, 0x20)))
+                    let t1 := and(add(add(add(add(mload(0x00), s1), ch), getK(t)), wt), MASK32)
 
                     let s0 := and(xor(xor(rotr32(a, 2), rotr32(a, 13)), rotr32(a, 22)), MASK32)
                     let mj := and(xor(xor(and(a, b), and(a, c)), and(b, c)), MASK32)
                     let t2 := and(add(s0, mj), MASK32)
 
-                    hh := gg
+                    mstore(0x00, gg)
                     gg := ff
                     ff := e
                     e := and(add(dd, t1), MASK32)
@@ -163,7 +165,7 @@ library Sha256 {
                 mstore(add(hPtr, 0x80), and(add(mload(add(hPtr, 0x80)), e), MASK32))
                 mstore(add(hPtr, 0xa0), and(add(mload(add(hPtr, 0xa0)), ff), MASK32))
                 mstore(add(hPtr, 0xc0), and(add(mload(add(hPtr, 0xc0)), gg), MASK32))
-                mstore(add(hPtr, 0xe0), and(add(mload(add(hPtr, 0xe0)), hh), MASK32))
+                mstore(add(hPtr, 0xe0), and(add(mload(add(hPtr, 0xe0)), mload(0x00)), MASK32))
             }
 
             // ── Produce 32-byte result (big-endian) ──────────────

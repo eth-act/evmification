@@ -238,18 +238,8 @@ library MapFpToG2 {
         // Convert Jacobian input to affine (1 Fp2.inv)
         (Fp2.Element memory px, Fp2.Element memory py) = _jacToAffine(jX, jY, jZ);
 
-        Fp2.Element memory ONE = Fp2.one();
-
         // Compute ψ(P) in affine (cheap: 2 mul + conjugations)
         (Fp2.Element memory psiPx, Fp2.Element memory psiPy) = _psiAffine(px, py);
-
-        // Compute ψ²(2P): double P in Jacobian, then apply ψ² in Jacobian
-        (Fp2.Element memory twoJX, Fp2.Element memory twoJY, Fp2.Element memory twoJZ) = _g2JacDouble(px, py, ONE);
-        (Fp2.Element memory psi2_2X, Fp2.Element memory psi2_2Y, Fp2.Element memory psi2_2Z) = _psi2Jac(twoJX, twoJY, twoJZ);
-
-        // Compute [|x|]P in Jacobian (multiply by seed absolute value)
-        (Fp2.Element memory xPX, Fp2.Element memory xPY, Fp2.Element memory xPZ) = _mulBySeedJac(px, py);
-        // xP = [-x]P = |x|P  (seed is negative, so _mulBySeed gives |x|*P)
 
         // blst's approach (z = |x| = -seed):
         // out = ψ²(2P) - P - ψ(P)
@@ -259,29 +249,66 @@ library MapFpToG2 {
         // out = out + t1 = [z²+z-1]P + [-z-1]ψ(P) + ψ²(2P)
         //
         // Since z = -x: [z²+z-1] = [x²-x-1], [-z-1] = [x-1]. ✓
-
-        // out = ψ²(2P) - P  (mixed add: P is affine)
+        // Split into helpers to keep stack depth manageable under via-ir + optimizer.
         (Fp2.Element memory outX, Fp2.Element memory outY, Fp2.Element memory outZ) =
-            _g2JacAddMixed(psi2_2X, psi2_2Y, psi2_2Z, px, Fp2.neg(py));
-        // out = out - ψ(P)  (mixed add: ψ(P) is affine)
-        (outX, outY, outZ) = _g2JacAddMixed(outX, outY, outZ, psiPx, Fp2.neg(psiPy));
+            _cofactorOutTerm(px, py, psiPx, psiPy);
 
-        // t0 = [z]P + P = xP + P  (mixed add: P is affine)
-        (Fp2.Element memory t0X, Fp2.Element memory t0Y, Fp2.Element memory t0Z) =
-            _g2JacAddMixed(xPX, xPY, xPZ, px, py);
-
-        // t0 = t0 - ψ(P)  (mixed add: ψ(P) is affine)
-        (t0X, t0Y, t0Z) = _g2JacAddMixed(t0X, t0Y, t0Z, psiPx, Fp2.neg(psiPy));
-
-        // t1 = [z]*t0  (t0 is Jacobian)
         (Fp2.Element memory t1X, Fp2.Element memory t1Y, Fp2.Element memory t1Z) =
-            _mulBySeedJacFull(t0X, t0Y, t0Z);
+            _cofactorT1Term(px, py, psiPx, psiPy);
 
         // out = out + t1  (general Jacobian add)
         (outX, outY, outZ) = _g2JacAdd(outX, outY, outZ, t1X, t1Y, t1Z);
 
         // Convert back to affine with a single Fp2.inv
         return _jacToAffine(outX, outY, outZ);
+    }
+
+    /// @dev out = ψ²(2P) - P - ψ(P) in Jacobian coordinates.
+    function _cofactorOutTerm(
+        Fp2.Element memory px,
+        Fp2.Element memory py,
+        Fp2.Element memory psiPx,
+        Fp2.Element memory psiPy
+    )
+        private
+        pure
+        returns (Fp2.Element memory outX, Fp2.Element memory outY, Fp2.Element memory outZ)
+    {
+        // Compute ψ²(2P): double P in Jacobian, then apply ψ² in Jacobian
+        (Fp2.Element memory twoJX, Fp2.Element memory twoJY, Fp2.Element memory twoJZ) =
+            _g2JacDouble(px, py, Fp2.one());
+        (twoJX, twoJY, twoJZ) = _psi2Jac(twoJX, twoJY, twoJZ);
+
+        // out = ψ²(2P) - P  (mixed add: P is affine)
+        (outX, outY, outZ) = _g2JacAddMixed(twoJX, twoJY, twoJZ, px, Fp2.neg(py));
+        // out = out - ψ(P)  (mixed add: ψ(P) is affine)
+        (outX, outY, outZ) = _g2JacAddMixed(outX, outY, outZ, psiPx, Fp2.neg(psiPy));
+    }
+
+    /// @dev t1 = [z]([z]P + P - ψ(P)) in Jacobian coordinates, z = |seed|.
+    function _cofactorT1Term(
+        Fp2.Element memory px,
+        Fp2.Element memory py,
+        Fp2.Element memory psiPx,
+        Fp2.Element memory psiPy
+    )
+        private
+        pure
+        returns (Fp2.Element memory, Fp2.Element memory, Fp2.Element memory)
+    {
+        // Compute [|x|]P in Jacobian (multiply by seed absolute value)
+        // xP = [-x]P = |x|P  (seed is negative, so _mulBySeed gives |x|*P)
+        (Fp2.Element memory t0X, Fp2.Element memory t0Y, Fp2.Element memory t0Z) =
+            _mulBySeedJac(px, py);
+
+        // t0 = [z]P + P = xP + P  (mixed add: P is affine)
+        (t0X, t0Y, t0Z) = _g2JacAddMixed(t0X, t0Y, t0Z, px, py);
+
+        // t0 = t0 - ψ(P)  (mixed add: ψ(P) is affine)
+        (t0X, t0Y, t0Z) = _g2JacAddMixed(t0X, t0Y, t0Z, psiPx, Fp2.neg(psiPy));
+
+        // t1 = [z]*t0  (t0 is Jacobian)
+        return _mulBySeedJacFull(t0X, t0Y, t0Z);
     }
 
     /// @dev Convert Jacobian (X:Y:Z) to affine (X/Z², Y/Z³) with a single Fp2.inv.
@@ -335,6 +362,11 @@ library MapFpToG2 {
         rY = py;
         rZ = Fp2.one();
 
+        // Staging + memory checkpoint: reclaim each iteration's allocations
+        Fp2.Element[3] memory stage = Fp2.stage3();
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
+
         // Process from bit 62 down to 0
         for (uint256 i = 62; i < 64; ) {
             (rX, rY, rZ) = _g2JacDouble(rX, rY, rZ);
@@ -342,6 +374,9 @@ library MapFpToG2 {
                 // Mixed addition: base point P is affine
                 (rX, rY, rZ) = _g2JacAddMixed(rX, rY, rZ, px, py);
             }
+
+            (rX, rY, rZ) = Fp2.park3(stage, rX, rY, rZ, memBase);
+
             unchecked {
                 if (i == 0) break;
                 --i;
@@ -366,12 +401,20 @@ library MapFpToG2 {
         rY = ay;
         rZ = Fp2.one();
 
+        // Staging + memory checkpoint: reclaim each iteration's allocations
+        Fp2.Element[3] memory stage = Fp2.stage3();
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
+
         // Process from bit 62 down to 0
         for (uint256 i = 62; i < 64; ) {
             (rX, rY, rZ) = _g2JacDouble(rX, rY, rZ);
             if ((seed >> i) & 1 == 1) {
                 (rX, rY, rZ) = _g2JacAddMixed(rX, rY, rZ, ax, ay);
             }
+
+            (rX, rY, rZ) = Fp2.park3(stage, rX, rY, rZ, memBase);
+
             unchecked {
                 if (i == 0) break;
                 --i;

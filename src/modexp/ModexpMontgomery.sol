@@ -26,6 +26,12 @@ library ModexpMontgomery {
 
         uint256 k = (modLen + 31) / 32; // number of 256-bit limbs
 
+        // Single-limb modulus: native mulmod square-and-multiply, no limb machinery
+        if (k == 1) {
+            LimbMath.modexpWordInto(base, exponent, modulus, result);
+            return result;
+        }
+
         // Convert inputs to little-endian limb arrays
         uint256[] memory n = LimbMath.bytesToLimbs(modulus, k);
 
@@ -146,28 +152,21 @@ library ModexpMontgomery {
         assembly { freeMemBase := mload(0x40) }
 
         // Find the topmost set bit in the first non-zero byte
-        uint8 b = uint8(exponent[startByte]);
         uint256 topBit = 7;
-        while (topBit > 0 && (b >> topBit) & 1 == 0) {
-            topBit--;
-        }
-
-        // Process first non-zero byte (from topBit down to bit 0)
-        for (uint256 bit = topBit;;) {
-            assembly { mstore(0x40, freeMemBase) }
-            LimbMath.copyLimbs(_montSqr(rM, n, n0inv, k), rM, k); // square
-            if ((b >> bit) & 1 == 1) {
-                assembly { mstore(0x40, freeMemBase) }
-                LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k); // multiply
+        {
+            uint256 first = uint8(exponent[startByte]);
+            while (topBit > 0 && (first >> topBit) & 1 == 0) {
+                topBit--;
             }
-            if (bit == 0) break;
-            unchecked { bit--; }
         }
 
-        // Process remaining exponent bytes (all 8 bits each)
-        for (uint256 byteIdx = startByte + 1; byteIdx < expLen; byteIdx++) {
-            b = uint8(exponent[byteIdx]);
-            for (uint256 bit = 8; bit > 0;) {
+        // Unified square-and-multiply loop across all exponent bytes.
+        // topBit is the first byte's top set bit, then 7 for all later bytes.
+        for (uint256 byteIdx = startByte; byteIdx < expLen; byteIdx++) {
+            uint256 b = uint8(exponent[byteIdx]);
+            uint256 bit = topBit + 1;
+            topBit = 7;
+            for (; bit > 0;) {
                 unchecked { bit--; }
                 assembly { mstore(0x40, freeMemBase) }
                 LimbMath.copyLimbs(_montSqr(rM, n, n0inv, k), rM, k); // square
@@ -236,12 +235,12 @@ library ModexpMontgomery {
             let aP := add(a, 0x20)
             let nP := add(n, 0x20)
             let resP := add(res, 0x20)
-            let kWords := mul(k, 0x20)
-            let k2p1 := add(mul(k, 2), 1)
+            let kWords := shl(5, k)
+            let aEnd := add(aP, kWords)
 
             // Allocate and zero scratch s[0..2k] (2k+1 words)
             let sP := mload(0x40)
-            let sEnd := add(sP, mul(k2p1, 0x20))
+            let sEnd := add(sP, add(shl(1, kWords), 0x20))
             mstore(0x40, sEnd)
             for { let p := sP } lt(p, sEnd) { p := add(p, 0x20) } {
                 mstore(p, 0)
@@ -250,14 +249,14 @@ library ModexpMontgomery {
             // ── Step 1a: Off-diagonal (upper triangle) ──
             // For i < j: accumulate a[i]*a[j] into s[i+j]
             {
-                let aOff_i := aP
-                for { let i := 0 } lt(i, k) { i := add(i, 1) } {
+                // sRow tracks &s[2i+1]; advances 2 words per row
+                let sRow := add(sP, 0x20)
+                for { let aOff_i := aP } lt(aOff_i, aEnd) { aOff_i := add(aOff_i, 0x20) } {
                     let ai := mload(aOff_i)
                     let carry := 0
-                    let aOff_j := add(aOff_i, 0x20)
-                    let sOff := add(sP, mul(add(mul(2, i), 1), 0x20))
+                    let sOff := sRow
 
-                    for { let j := add(i, 1) } lt(j, k) { j := add(j, 1) } {
+                    for { let aOff_j := add(aOff_i, 0x20) } lt(aOff_j, aEnd) { aOff_j := add(aOff_j, 0x20) } {
                         let aj := mload(aOff_j)
 
                         let lo := mul(ai, aj)
@@ -271,31 +270,27 @@ library ModexpMontgomery {
                         carry := add(hi, add(c1, lt(s2, s1)))
 
                         sOff := add(sOff, 0x20)
-                        aOff_j := add(aOff_j, 0x20)
                     }
                     mstore(sOff, carry)
 
-                    aOff_i := add(aOff_i, 0x20)
+                    sRow := add(sRow, 0x40)
                 }
             }
 
             // ── Step 1b: Double (left shift by 1 bit) ──
             {
                 let carry := 0
-                let sOff := sP
-                for { let i := 0 } lt(i, k2p1) { i := add(i, 1) } {
+                for { let sOff := sP } lt(sOff, sEnd) { sOff := add(sOff, 0x20) } {
                     let val := mload(sOff)
                     mstore(sOff, or(shl(1, val), carry))
                     carry := shr(255, val)
-                    sOff := add(sOff, 0x20)
                 }
             }
 
             // ── Step 1c: Add diagonal a[i]² into s[2i..2i+1] ──
             {
-                let aOff := aP
                 let sOff := sP
-                for { let i := 0 } lt(i, k) { i := add(i, 1) } {
+                for { let aOff := aP } lt(aOff, aEnd) { aOff := add(aOff, 0x20) } {
                     let ai := mload(aOff)
 
                     let lo := mul(ai, ai)
@@ -327,20 +322,35 @@ library ModexpMontgomery {
                     }
 
                     sOff := add(sOff, 0x40)
-                    aOff := add(aOff, 0x20)
                 }
             }
 
             // ── Step 2: Montgomery reduction (no shift, advance base) ──
             {
+                let nEnd := add(nP, kWords)
+                let sKEnd := add(sP, kWords)
                 let sBase := sP
-                for { let i := 0 } lt(i, k) { i := add(i, 1) } {
+                for {} lt(sBase, sKEnd) { sBase := add(sBase, 0x20) } {
                     let m := mul(mload(sBase), n0inv)
-                    let carry := 0
-                    let sOff := sBase
-                    let nOff := nP
 
-                    for { let j := 0 } lt(j, k) { j := add(j, 1) } {
+                    // Peel j = 0: m*n[0] + s[base] ≡ 0 mod 2^256 by construction and
+                    // s[base] is never read again — only the carry survives.
+                    let carry
+                    {
+                        let n0 := mload(nP)
+                        let lo := mul(m, n0)
+                        let mmr := mulmod(m, n0, not(0))
+                        carry := add(
+                            sub(sub(mmr, lo), lt(mmr, lo)),   // hi
+                            lt(add(lo, mload(sBase)), lo)     // carry out of lo + s[base]
+                        )
+                    }
+
+                    let sOff := add(sBase, 0x20)
+                    for { let nOff := add(nP, 0x20) } lt(nOff, nEnd) {
+                        nOff := add(nOff, 0x20)
+                        sOff := add(sOff, 0x20)
+                    } {
                         let nj := mload(nOff)
                         let lo := mul(m, nj)
                         let mmr := mulmod(m, nj, not(0))
@@ -349,12 +359,8 @@ library ModexpMontgomery {
                         let s1 := add(lo, mload(sOff))
                         let c1 := lt(s1, lo)
                         let s2 := add(s1, carry)
-                        let c2 := lt(s2, s1)
                         mstore(sOff, s2)
-                        carry := add(hi, add(c1, c2))
-
-                        sOff := add(sOff, 0x20)
-                        nOff := add(nOff, 0x20)
+                        carry := add(hi, add(c1, lt(s2, s1)))
                     }
 
                     // Propagate carry into s[i+k..2k]
@@ -365,24 +371,23 @@ library ModexpMontgomery {
                         mstore(sOff, newVal)
                         sOff := add(sOff, 0x20)
                     }
-
-                    sBase := add(sBase, 0x20)
                 }
 
                 // ── Final conditional subtraction ──
                 // Result is in s[k..2k-1], sBase points to s[k]
                 {
-                    let s2kOff := add(sP, mul(mul(k, 2), 0x20))
-                    let doSub := gt(mload(s2kOff), 0)
+                    let doSub := gt(mload(add(sBase, kWords)), 0)
 
                     if iszero(doSub) {
                         doSub := 1
-                        for { let i := k } gt(i, 0) {} {
-                            i := sub(i, 1)
-                            let sL := mload(add(sBase, mul(i, 0x20)))
-                            let nL := mload(add(nP, mul(i, 0x20)))
-                            if gt(sL, nL) { i := 0 }
-                            if lt(sL, nL) { doSub := 0 i := 0 }
+                        let nOff := add(nP, kWords)
+                        for { let sOff := add(sBase, kWords) } gt(sOff, sBase) {} {
+                            sOff := sub(sOff, 0x20)
+                            nOff := sub(nOff, 0x20)
+                            let sL := mload(sOff)
+                            let nL := mload(nOff)
+                            if gt(sL, nL) { sOff := sBase }
+                            if lt(sL, nL) { doSub := 0 sOff := sBase }
                         }
                     }
 
@@ -427,26 +432,32 @@ library ModexpMontgomery {
             let bP := add(b, 0x20)
             let nP := add(n, 0x20)
             let resP := add(res, 0x20)
+            let kW := shl(5, k)
 
             // Allocate scratch t[0..k+1]
             let tP := mload(0x40)
-            mstore(0x40, add(tP, mul(add(k, 2), 0x20)))
+            let tEnd := add(tP, kW) // &t[k]
+            mstore(0x40, add(tEnd, 0x40))
 
             // Zero t
-            for { let i := 0 } lt(i, add(k, 2)) { i := add(i, 1) } {
-                mstore(add(tP, mul(i, 0x20)), 0)
+            for { let p := tP } lt(p, add(tEnd, 0x40)) { p := add(p, 0x20) } {
+                mstore(p, 0)
             }
 
             // Main CIOS loop: one iteration per limb of a
-            for { let i := 0 } lt(i, k) { i := add(i, 1) } {
-                let ai := mload(add(aP, mul(i, 0x20)))
+            let aEnd := add(aP, kW)
+            for { let aOff := aP } lt(aOff, aEnd) { aOff := add(aOff, 0x20) } {
+                let ai := mload(aOff)
 
                 // Step 1: Multiply pass — t += a[i] * b
                 {
                     let carry := 0
-                    for { let j := 0 } lt(j, k) { j := add(j, 1) } {
-                        let tOff := add(tP, mul(j, 0x20))
-                        let bj := mload(add(bP, mul(j, 0x20)))
+                    let bOff := bP
+                    for { let tOff := tP } lt(tOff, tEnd) {
+                        tOff := add(tOff, 0x20)
+                        bOff := add(bOff, 0x20)
+                    } {
+                        let bj := mload(bOff)
 
                         // Full 512-bit product: (hi, lo) = ai * bj
                         let lo := mul(ai, bj)
@@ -462,24 +473,37 @@ library ModexpMontgomery {
                     }
 
                     // Propagate carry into t[k] and t[k+1]
-                    let tkOff := add(tP, mul(k, 0x20))
-                    let tk := mload(tkOff)
+                    let tk := mload(tEnd)
                     let tkNew := add(tk, carry)
-                    mstore(tkOff, tkNew)
-                    mstore(
-                        add(tP, mul(add(k, 1), 0x20)),
-                        add(mload(add(tP, mul(add(k, 1), 0x20))), lt(tkNew, tk))
-                    )
+                    mstore(tEnd, tkNew)
+                    let tk1Off := add(tEnd, 0x20)
+                    mstore(tk1Off, add(mload(tk1Off), lt(tkNew, tk)))
                 }
 
                 // Step 2: Reduce pass — m = t[0]*n0inv; t += m*n; shift right one word
                 {
                     let m := mul(mload(tP), n0inv)
-                    let carry := 0
 
-                    for { let j := 0 } lt(j, k) { j := add(j, 1) } {
-                        let tOff := add(tP, mul(j, 0x20))
-                        let nj := mload(add(nP, mul(j, 0x20)))
+                    // Peel j = 0: by construction m*n[0] + t[0] ≡ 0 mod 2^256, so the
+                    // low word is exactly 0 and is discarded by the shift — only the
+                    // carry survives.
+                    let carry
+                    {
+                        let n0 := mload(nP)
+                        let lo := mul(m, n0)
+                        let mmr := mulmod(m, n0, not(0))
+                        carry := add(
+                            sub(sub(mmr, lo), lt(mmr, lo)), // hi
+                            lt(add(lo, mload(tP)), lo)      // carry out of lo + t[0]
+                        )
+                    }
+
+                    let nOff := add(nP, 0x20)
+                    for { let tOff := add(tP, 0x20) } lt(tOff, tEnd) {
+                        tOff := add(tOff, 0x20)
+                        nOff := add(nOff, 0x20)
+                    } {
+                        let nj := mload(nOff)
 
                         let lo := mul(m, nj)
                         let mmr := mulmod(m, nj, not(0))
@@ -488,58 +512,61 @@ library ModexpMontgomery {
                         let s1 := add(lo, mload(tOff))
                         let c1 := lt(s1, lo)
                         let s2 := add(s1, carry)
-                        let c2 := lt(s2, s1)
 
                         // Shift down: write result to t[j-1] (division by 2^256)
-                        if gt(j, 0) { mstore(add(tP, mul(sub(j, 1), 0x20)), s2) }
+                        mstore(sub(tOff, 0x20), s2)
 
-                        carry := add(hi, add(c1, c2))
+                        carry := add(hi, add(c1, lt(s2, s1)))
                     }
 
                     // Propagate carry into upper limbs (with shift)
-                    let tkVal := mload(add(tP, mul(k, 0x20)))
+                    let tkVal := mload(tEnd)
                     let sum := add(tkVal, carry)
-                    mstore(add(tP, mul(sub(k, 1), 0x20)), sum)
-                    let tk1Off := add(tP, mul(add(k, 1), 0x20))
-                    mstore(add(tP, mul(k, 0x20)), add(mload(tk1Off), lt(sum, tkVal)))
+                    mstore(sub(tEnd, 0x20), sum)
+                    let tk1Off := add(tEnd, 0x20)
+                    mstore(tEnd, add(mload(tk1Off), lt(sum, tkVal)))
                     mstore(tk1Off, 0)
                 }
             }
 
             // Final conditional subtraction: if t >= n then t -= n
             {
-                let doSub := gt(mload(add(tP, mul(k, 0x20))), 0)
+                let doSub := gt(mload(tEnd), 0)
 
                 if iszero(doSub) {
                     // Compare t vs n from the most significant limb downward
                     doSub := 1 // assume t >= n (covers the equal case)
-                    for { let i := k } gt(i, 0) {} {
-                        i := sub(i, 1)
-                        let tL := mload(add(tP, mul(i, 0x20)))
-                        let nL := mload(add(nP, mul(i, 0x20)))
-                        if gt(tL, nL) { i := 0 }             // t > n, subtract
-                        if lt(tL, nL) { doSub := 0 i := 0 }  // t < n, no subtract
+                    let nOff := add(nP, kW)
+                    for { let tOff := tEnd } gt(tOff, tP) {} {
+                        tOff := sub(tOff, 0x20)
+                        nOff := sub(nOff, 0x20)
+                        let tL := mload(tOff)
+                        let nL := mload(nOff)
+                        if gt(tL, nL) { tOff := tP }             // t > n, subtract
+                        if lt(tL, nL) { doSub := 0 tOff := tP }  // t < n, no subtract
                         // if equal, continue to next limb
                     }
                 }
 
                 // Copy t[0..k-1] to res
-                for { let i := 0 } lt(i, k) { i := add(i, 1) } {
-                    mstore(add(resP, mul(i, 0x20)), mload(add(tP, mul(i, 0x20))))
-                }
+                mcopy(resP, tP, kW)
 
                 // Conditionally subtract n
                 if doSub {
                     let borrow := 0
-                    for { let i := 0 } lt(i, k) { i := add(i, 1) } {
-                        let off := add(resP, mul(i, 0x20))
-                        let rL := mload(off)
-                        let nL := mload(add(nP, mul(i, 0x20)))
+                    let nOff := nP
+                    let rEnd := add(resP, kW)
+                    for { let rOff := resP } lt(rOff, rEnd) {
+                        rOff := add(rOff, 0x20)
+                        nOff := add(nOff, 0x20)
+                    } {
+                        let rL := mload(rOff)
+                        let nL := mload(nOff)
                         let d := sub(rL, nL)
                         let nb := lt(rL, nL)
                         let d2 := sub(d, borrow)
                         borrow := or(nb, lt(d, borrow))
-                        mstore(off, d2)
+                        mstore(rOff, d2)
                     }
                 }
             }

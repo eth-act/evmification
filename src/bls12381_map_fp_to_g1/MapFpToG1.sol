@@ -161,6 +161,11 @@ library MapFpToG1 {
         bytes memory rY = py;
         bytes memory rZ = Fp.fromUint256(1);
 
+        // Staging + memory checkpoint: reclaim each iteration's allocations
+        bytes[3] memory stage = Fp.stage3();
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
+
         // Double-and-add from bit 62 down to 0 (bit 63 is MSB, already set as initial point)
         for (uint256 i = 63; i > 0;) {
             unchecked { --i; }
@@ -169,6 +174,8 @@ library MapFpToG1 {
                 // Mixed add: Jacobian + affine base point
                 (rX, rY, rZ) = _g1JacAddMixed(rX, rY, rZ, px, py);
             }
+
+            (rX, rY, rZ) = Fp.park3(stage, rX, rY, rZ, memBase);
         }
 
         // Convert back to affine: single inversion

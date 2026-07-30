@@ -14,6 +14,13 @@ library Pairing {
     /// @dev BLS12-381 parameter |x| = 0xd201000000010000 (64 bits, x is negative).
     uint64 constant BLS_X = 0xd201000000010000;
 
+    /// @dev G2 point in Jacobian coordinates, bundled to keep stack pressure low.
+    struct G2Jac {
+        Fp2.Element X;
+        Fp2.Element Y;
+        Fp2.Element Z;
+    }
+
     /// @notice BLS12-381 pairing check.
     /// @param input k * 384 bytes: k pairs of (G1_point(128) || G2_point(256))
     /// @return result 32 bytes: 0x...01 if product of pairings == 1, else 0x...00
@@ -24,6 +31,12 @@ library Pairing {
         uint256 k = len / 384;
 
         Fp12.Element memory f = Fp12.one();
+
+        // Staging buffer + memory checkpoint so each pair's parse/validate/Miller-loop
+        // garbage is reclaimed instead of accumulating across pairs.
+        Fp12.Element memory fStage = Fp12.zero();
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
 
         for (uint256 i = 0; i < k; i++) {
             uint256 offset = i * 384;
@@ -64,7 +77,10 @@ library Pairing {
             if (!g2Inf) _checkOnCurveG2(Qx, Qy);
 
             // Skip pairs where P or Q is infinity
-            if (g1Inf || g2Inf) continue;
+            if (g1Inf || g2Inf) {
+                assembly { mstore(0x40, memBase) }
+                continue;
+            }
 
             // Validate subgroup membership
             // G1: check r*P = O by using the endomorphism: for BLS12-381,
@@ -78,14 +94,24 @@ library Pairing {
             // Compute Miller loop for this pair
             Fp12.Element memory fi = _millerLoop(Px, Py, Qx, Qy);
             f = Fp12.mul(f, fi);
+
+            // Park f in staging and reclaim this pair's garbage
+            Fp12.copyInto(f, fStage);
+            assembly { mstore(0x40, memBase) }
+            f = fStage;
         }
 
-        // Final exponentiation
-        f = _finalExponentiation(f);
+        // Final exponentiation. Skip when f == 1 (1^e = 1) — covers empty input
+        // and pairs that were all skipped as infinity, saving the full ~80M-gas
+        // exponentiation in those cases.
+        bool isOne = Fp12.eq(f, Fp12.one());
+        if (!isOne) {
+            f = _finalExponentiation(f);
+            isOne = Fp12.eq(f, Fp12.one());
+        }
 
-        // Check if result equals 1
         result = new bytes(32);
-        if (Fp12.eq(f, Fp12.one())) {
+        if (isOne) {
             result[31] = 0x01;
         }
     }
@@ -101,11 +127,17 @@ library Pairing {
         Fp2.Element memory Qy
     ) private pure returns (Fp12.Element memory f) {
         // T starts at Q in Jacobian projective coordinates (X, Y, Z=1)
-        Fp2.Element memory Tx = Qx;
-        Fp2.Element memory Ty = Qy;
-        Fp2.Element memory Tz = Fp2.one();
+        G2Jac memory T = G2Jac(Qx, Qy, Fp2.one());
 
         f = Fp12.one();
+
+        // Staging buffers + memory checkpoint: each iteration parks the live values
+        // (f, T) in the staging area and rewinds the free memory pointer. Without
+        // this the loop allocates tens of MB and memory expansion cost dominates.
+        Fp12.Element memory fStage = Fp12.zero();
+        G2Jac memory tStage = G2Jac(Fp2.zero(), Fp2.zero(), Fp2.zero());
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
 
         // |x| = 0xd201000000010000
         // Binary: 1101001000000001000000000000000000000000000000010000000000000000
@@ -115,36 +147,24 @@ library Pairing {
             // Square f
             f = Fp12.sqr(f);
 
-            // Doubling step
-            Fp2.Element memory c0;
-            Fp2.Element memory c1;
-            Fp2.Element memory c4;
-            Fp2.Element memory newTx;
-            Fp2.Element memory newTy;
-            Fp2.Element memory newTz;
-            (c0, c1, c4, newTx, newTy, newTz) = _doublingStep(Tx, Ty, Tz);
-            Tx = newTx;
-            Ty = newTy;
-            Tz = newTz;
-
-            // Evaluate line at P: scale coefficients by P's coordinates
-            // c0 is scaled by P.y, c1 is scaled by P.x
-            // mul_by_014 arg order from zkcrypto: (constant_term, c1*Px, c0*Py)
-            c0 = Fp2.mulFp(c0, Py);
-            c1 = Fp2.mulFp(c1, Px);
-            f = Fp12.mul_by_014(f, c4, c1, c0);
+            // Doubling step (helper keeps the caller's stack shallow for via-ir + optimizer)
+            f = _stepDouble(f, T, Px, Py);
 
             // Addition step if bit is set
             if ((uint256(BLS_X) >> i) & 1 == 1) {
-                (c0, c1, c4, newTx, newTy, newTz) = _additionStep(Tx, Ty, Tz, Qx, Qy);
-                Tx = newTx;
-                Ty = newTy;
-                Tz = newTz;
-
-                c0 = Fp2.mulFp(c0, Py);
-                c1 = Fp2.mulFp(c1, Px);
-                f = Fp12.mul_by_014(f, c4, c1, c0);
+                f = _stepAdd(f, T, Qx, Qy, Px, Py);
             }
+
+            // Park f and T in staging, reclaim this iteration's garbage.
+            // T gets a fresh wrapper struct so the step helpers' field writes
+            // never redirect tStage's pointers away from the staging buffers.
+            Fp12.copyInto(f, fStage);
+            Fp2.copyInto(T.X, tStage.X);
+            Fp2.copyInto(T.Y, tStage.Y);
+            Fp2.copyInto(T.Z, tStage.Z);
+            assembly { mstore(0x40, memBase) }
+            f = fStage;
+            T = G2Jac(tStage.X, tStage.Y, tStage.Z);
 
             unchecked {
                 if (i == 0) break;
@@ -154,6 +174,59 @@ library Pairing {
 
         // x is negative, so conjugate f
         f = Fp12.conjugate(f);
+    }
+
+    /// @dev One doubling step folded into f: T <- 2T (updated in place), f <- f * line(P).
+    function _stepDouble(
+        Fp12.Element memory f,
+        G2Jac memory T,
+        bytes memory Px,
+        bytes memory Py
+    ) private pure returns (Fp12.Element memory) {
+        (
+            Fp2.Element memory c0,
+            Fp2.Element memory c1,
+            Fp2.Element memory c4,
+            Fp2.Element memory newTx,
+            Fp2.Element memory newTy,
+            Fp2.Element memory newTz
+        ) = _doublingStep(T.X, T.Y, T.Z);
+        T.X = newTx;
+        T.Y = newTy;
+        T.Z = newTz;
+
+        // Evaluate line at P: scale coefficients by P's coordinates
+        // c0 is scaled by P.y, c1 is scaled by P.x
+        // mul_by_014 arg order from zkcrypto: (constant_term, c1*Px, c0*Py)
+        c0 = Fp2.mulFp(c0, Py);
+        c1 = Fp2.mulFp(c1, Px);
+        return Fp12.mul_by_014(f, c4, c1, c0);
+    }
+
+    /// @dev One addition step folded into f: T <- T + Q (updated in place), f <- f * line(P).
+    function _stepAdd(
+        Fp12.Element memory f,
+        G2Jac memory T,
+        Fp2.Element memory Qx,
+        Fp2.Element memory Qy,
+        bytes memory Px,
+        bytes memory Py
+    ) private pure returns (Fp12.Element memory) {
+        (
+            Fp2.Element memory c0,
+            Fp2.Element memory c1,
+            Fp2.Element memory c4,
+            Fp2.Element memory newTx,
+            Fp2.Element memory newTy,
+            Fp2.Element memory newTz
+        ) = _additionStep(T.X, T.Y, T.Z, Qx, Qy);
+        T.X = newTx;
+        T.Y = newTy;
+        T.Z = newTz;
+
+        c0 = Fp2.mulFp(c0, Py);
+        c1 = Fp2.mulFp(c1, Px);
+        return Fp12.mul_by_014(f, c4, c1, c0);
     }
 
     // ── Doubling Step ────────────────────────────────────────────────────

@@ -27,6 +27,14 @@ library Fp6 {
         return Element(Fp2.one(), Fp2.zero(), Fp2.zero());
     }
 
+    /// @notice Copy the value of a into the pre-allocated element dst.
+    /// @dev See Fp.copyInto — used for memory recycling in hot loops.
+    function copyInto(Element memory a, Element memory dst) internal pure {
+        Fp2.copyInto(a.c0, dst.c0);
+        Fp2.copyInto(a.c1, dst.c1);
+        Fp2.copyInto(a.c2, dst.c2);
+    }
+
     // ── Arithmetic ──────────────────────────────────────────────────────
 
     /// @notice (a + b) in Fp6.

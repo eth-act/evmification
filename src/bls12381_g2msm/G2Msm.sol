@@ -94,6 +94,11 @@ library G2Msm {
             bit--;
         }
 
+        // Staging + memory checkpoint: reclaim each iteration's allocations
+        Fp2.Element[3] memory stage = Fp2.stage3();
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
+
         // Process from highest set bit down to 0
         for (uint256 j = bit + 1; j > 0;) {
             j--;
@@ -113,6 +118,8 @@ library G2Msm {
                     (X, Y, Z) = _g2JacAddMixed(X, Y, Z, qx, qy);
                 }
             }
+
+            (X, Y, Z) = Fp2.park3(stage, X, Y, Z, memBase);
         }
     }
 

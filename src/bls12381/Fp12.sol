@@ -30,6 +30,13 @@ library Fp12 {
         return Element(Fp6.one(), Fp6.zero());
     }
 
+    /// @notice Copy the value of a into the pre-allocated element dst.
+    /// @dev See Fp.copyInto — used for memory recycling in hot loops.
+    function copyInto(Element memory a, Element memory dst) internal pure {
+        Fp6.copyInto(a.c0, dst.c0);
+        Fp6.copyInto(a.c1, dst.c1);
+    }
+
     // ── Arithmetic ──────────────────────────────────────────────────────
 
     /// @notice (a + b) in Fp12.
@@ -145,19 +152,29 @@ library Fp12 {
     /// @notice Exponentiate by |x| (the BLS parameter) using square-and-multiply.
     /// @dev Since x is negative for BLS12-381, caller must conjugate the result.
     function cyclotomic_exp(Element memory a) internal pure returns (Element memory) {
-        Element memory result = one();
-
         // Iterate from bit 62 down to 0 (bit 63 is the MSB, which is 1, so start with result = a)
         // BLS_X = 0xd201000000010000
         // Binary: 1101001000000001000000000000000000000000000000010000000000000000
         // MSB is bit 63.
-        result = a; // accounts for MSB = 1
+        Element memory result = a; // accounts for MSB = 1
+
+        // Staging buffer + memory checkpoint: each iteration parks `result` in the
+        // staging area and rewinds the free memory pointer, keeping memory flat
+        // (otherwise the loop's allocations push memory expansion costs quadratic).
+        Element memory stage = zero();
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
 
         for (uint256 i = 62;; i--) {
             result = cyclotomic_square(result);
             if ((BLS_X >> i) & 1 == 1) {
                 result = mul(result, a);
             }
+
+            copyInto(result, stage);
+            assembly { mstore(0x40, memBase) }
+            result = stage;
+
             if (i == 0) break;
         }
 

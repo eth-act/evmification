@@ -163,6 +163,11 @@ library G1Msm {
         // Find MSB position.
         uint256 msb = _msb(scalar);
 
+        // Staging + memory checkpoint: reclaim each iteration's allocations
+        bytes[3] memory stage = Fp.stage3();
+        uint256 memBase;
+        assembly { memBase := mload(0x40) }
+
         // Double-and-add from MSB-1 down to 0.
         for (uint256 i = msb; i > 0;) {
             unchecked { --i; }
@@ -170,6 +175,8 @@ library G1Msm {
             if ((scalar >> i) & 1 == 1) {
                 (X, Y, Z) = _g1JacAddMixed(X, Y, Z, px, py);
             }
+
+            (X, Y, Z) = Fp.park3(stage, X, Y, Z, memBase);
         }
     }
 
