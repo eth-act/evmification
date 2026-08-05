@@ -35,32 +35,16 @@ library ModexpMontgomery {
         // Convert inputs to little-endian limb arrays
         uint256[] memory n = LimbMath.bytesToLimbs(modulus, k);
 
-        // Fast path: skip schoolbook division when base already fits and base < n
-        uint256[] memory a;
-        {
-            uint256 baseLen = base.length;
-            uint256 baseK = (baseLen + 31) / 32;
-            if (baseK <= k) {
-                uint256[] memory baseLimbs = LimbMath.bytesToLimbs(base, k);
-                if (_limbsLt(baseLimbs, n, k)) {
-                    a = baseLimbs;
-                } else {
-                    a = LimbMath.schoolbookRem(baseLimbs, k, n, k);
-                }
-            } else {
-                a = LimbMath.reduceBase(base, n, k);
-            }
-        }
-
-        // Check exponent early — small exponents can skip Montgomery setup entirely
+        // Check exponent early — small exponents skip Montgomery setup entirely
         uint256 expSmall = _exponentToUint(exponent);
         uint256[] memory res;
 
         if (expSmall == 1) {
-            // e = 1: result is just base mod n (already reduced)
-            res = a;
+            // e = 1: result is just base mod n
+            res = _reduceBase(base, n, k);
         } else if (expSmall == 3) {
             // e = 3: direct schoolbook multiply, no Montgomery overhead
+            uint256[] memory a = _reduceBase(base, n, k);
             // base² mod n
             uint256[] memory a2 = LimbMath.schoolbookRem(
                 LimbMath.schoolbookMul(a, k, a, k), 2 * k, n, k
@@ -72,22 +56,37 @@ library ModexpMontgomery {
         } else {
             // Montgomery path — worth the setup cost for larger exponents
             uint256 n0inv = _computeN0inv(n[0]);
-            uint256[] memory r2 = _computeR2ModN(k, n);
             uint256[] memory one = new uint256[](k);
             one[0] = 1;
-            uint256[] memory aM = _montMul(a, r2, n, n0inv, k);
+            // Straight to the Montgomery domain: one division replaces the
+            // separate base reduction, R² mod n, and the montMul by R².
+            uint256[] memory aM = _toMontgomery(base, n, k);
 
             if (expSmall == 65537) {
                 uint256[] memory rM = _fastExp65537(aM, n, n0inv, k);
                 res = _montMul(rM, one, n, n0inv, k);
             } else {
-                uint256[] memory rM = _montMul(one, r2, n, n0inv, k);
+                // rM starts at R mod n, the Montgomery form of 1
+                uint256[] memory rM = _rModN(n, k);
                 rM = _modexpLoop(rM, aM, exponent, n, n0inv, k);
                 res = _montMul(rM, one, n, n0inv, k);
             }
         }
 
         LimbMath.limbsToBytes(res, result, modLen);
+    }
+
+    /// @dev base mod n as k little-endian limbs. Skips the division when the
+    ///      base already fits in k limbs and is smaller than n.
+    function _reduceBase(bytes memory base, uint256[] memory n, uint256 k)
+        private pure returns (uint256[] memory)
+    {
+        if ((base.length + 31) / 32 <= k) {
+            uint256[] memory baseLimbs = LimbMath.bytesToLimbs(base, k);
+            if (_limbsLt(baseLimbs, n, k)) return baseLimbs;
+            return LimbMath.schoolbookRem(baseLimbs, k, n, k);
+        }
+        return LimbMath.reduceBase(base, n, k);
     }
 
     // ── Montgomery setup ──────────────────────────────────────────────
@@ -103,14 +102,51 @@ library ModexpMontgomery {
         }
     }
 
-    /// @dev Computes R^2 mod n where R = 2^{256k}.
-    function _computeR2ModN(uint256 k, uint256[] memory n)
+    /// @dev Computes base·R mod n where R = 2^{256k} — the Montgomery form of
+    ///      base — by reducing base shifted up k limbs.
+    ///
+    ///      The textbook route is montMul(base mod n, R² mod n), which costs a
+    ///      division for R², a division to reduce the base, and a montMul. The
+    ///      shift is free (the low k limbs of the dividend are just zero), so
+    ///      one division does the whole job.
+    function _toMontgomery(bytes memory base, uint256[] memory n, uint256 k)
         private pure returns (uint256[] memory)
     {
-        uint256 dLen = 2 * k + 1;
-        uint256[] memory dividend = new uint256[](dLen);
-        dividend[2 * k] = 1;
+        uint256 baseK = (base.length + 31) / 32;
+        if (baseK == 0) return new uint256[](k);
+
+        uint256 dLen = baseK + k;
+        uint256[] memory dividend = new uint256[](dLen); // zero-initialised
+        uint256[] memory baseLimbs = LimbMath.bytesToLimbs(base, baseK);
+        assembly {
+            mcopy(
+                add(add(dividend, 0x20), shl(5, k)),
+                add(baseLimbs, 0x20),
+                shl(5, baseK)
+            )
+        }
         return LimbMath.schoolbookRem(dividend, dLen, n, k);
+    }
+
+    /// @dev Computes R mod n where R = 2^{256k} — the Montgomery form of 1.
+    ///      Only two quotient limbs, so this is far cheaper than the montMul by
+    ///      R² it replaces.
+    function _rModN(uint256[] memory n, uint256 k)
+        private pure returns (uint256[] memory)
+    {
+        uint256[] memory dividend = new uint256[](k + 1);
+        dividend[k] = 1;
+        return LimbMath.schoolbookRem(dividend, k + 1, n, k);
+    }
+
+    /// @dev Montgomery squaring. SOS trades multiplies for three extra O(k)
+    ///      passes (zero, double, diagonal); below k = 9 those passes cost more
+    ///      than the multiplies they save, so CIOS wins outright.
+    function _sqr(uint256[] memory x, uint256[] memory n, uint256 n0inv, uint256 k)
+        private pure returns (uint256[] memory)
+    {
+        if (k < 9) return _montMul(x, x, n, n0inv, k);
+        return _montSqr(x, n, n0inv, k);
     }
 
     /// @dev Returns true if a < b (both k-limb little-endian arrays).
@@ -169,7 +205,7 @@ library ModexpMontgomery {
             for (; bit > 0;) {
                 unchecked { bit--; }
                 assembly { mstore(0x40, freeMemBase) }
-                LimbMath.copyLimbs(_montSqr(rM, n, n0inv, k), rM, k); // square
+                LimbMath.copyLimbs(_sqr(rM, n, n0inv, k), rM, k); // square
                 if ((b >> bit) & 1 == 1) {
                     assembly { mstore(0x40, freeMemBase) }
                     LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k); // multiply
@@ -211,18 +247,23 @@ library ModexpMontgomery {
         assembly { freeMemBase := mload(0x40) }
         for (uint256 i = 0; i < 16; i++) {
             assembly { mstore(0x40, freeMemBase) }
-            LimbMath.copyLimbs(_montSqr(rM, n, n0inv, k), rM, k);
+            LimbMath.copyLimbs(_sqr(rM, n, n0inv, k), rM, k);
         }
         assembly { mstore(0x40, freeMemBase) }
         LimbMath.copyLimbs(_montMul(rM, aM, n, n0inv, k), rM, k);
     }
 
 
-
     // ── Montgomery squaring (SOS) ───────────────────────────────────
 
     /// @dev Computes a² * R⁻¹ mod n using Separated Operand Scanning.
     ///      Exploits a*a symmetry: upper triangle + double + diagonal = half the multiplies.
+    ///
+    ///      The two O(k²) passes are unrolled 4x. Constant sub-offsets
+    ///      (0x20/0x40/0x60) from one base pointer keep the per-limb pointers off
+    ///      the stack and amortise the loop control over four limbs; rolled, more
+    ///      than half the gas in these loops went to DUP/SWAP chains. The
+    ///      `k mod 4` remainder falls through to a single-step tail loop.
     function _montSqr(
         uint256[] memory a,
         uint256[] memory n,
@@ -255,21 +296,67 @@ library ModexpMontgomery {
                     let ai := mload(aOff_i)
                     let carry := 0
                     let sOff := sRow
+                    let aOff_j := add(aOff_i, 0x20)
 
-                    for { let aOff_j := add(aOff_i, 0x20) } lt(aOff_j, aEnd) { aOff_j := add(aOff_j, 0x20) } {
+                    // Rows shrink by one limb as i advances, so the 4x bound is
+                    // recomputed per row.
+                    let aMain := add(aOff_j, and(sub(aEnd, aOff_j), not(0x7f)))
+                    for {} lt(aOff_j, aMain) {
+                        aOff_j := add(aOff_j, 0x80)
+                        sOff := add(sOff, 0x80)
+                    } {
+                        {
+                            let aj := mload(aOff_j)
+                            let lo := mul(ai, aj)
+                            let mmr := mulmod(ai, aj, not(0))
+                            let s1 := add(lo, mload(sOff))
+                            let s2 := add(s1, carry)
+                            mstore(sOff, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let sA := add(sOff, 0x20)
+                            let aj := mload(add(aOff_j, 0x20))
+                            let lo := mul(ai, aj)
+                            let mmr := mulmod(ai, aj, not(0))
+                            let s1 := add(lo, mload(sA))
+                            let s2 := add(s1, carry)
+                            mstore(sA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let sA := add(sOff, 0x40)
+                            let aj := mload(add(aOff_j, 0x40))
+                            let lo := mul(ai, aj)
+                            let mmr := mulmod(ai, aj, not(0))
+                            let s1 := add(lo, mload(sA))
+                            let s2 := add(s1, carry)
+                            mstore(sA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let sA := add(sOff, 0x60)
+                            let aj := mload(add(aOff_j, 0x60))
+                            let lo := mul(ai, aj)
+                            let mmr := mulmod(ai, aj, not(0))
+                            let s1 := add(lo, mload(sA))
+                            let s2 := add(s1, carry)
+                            mstore(sA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                    }
+
+                    for {} lt(aOff_j, aEnd) {
+                        aOff_j := add(aOff_j, 0x20)
+                        sOff := add(sOff, 0x20)
+                    } {
                         let aj := mload(aOff_j)
-
                         let lo := mul(ai, aj)
                         let mmr := mulmod(ai, aj, not(0))
-                        let hi := sub(sub(mmr, lo), lt(mmr, lo))
-
                         let s1 := add(lo, mload(sOff))
-                        let c1 := lt(s1, lo)
                         let s2 := add(s1, carry)
                         mstore(sOff, s2)
-                        carry := add(hi, add(c1, lt(s2, s1)))
-
-                        sOff := add(sOff, 0x20)
+                        carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
                     }
                     mstore(sOff, carry)
 
@@ -329,41 +416,75 @@ library ModexpMontgomery {
             {
                 let nEnd := add(nP, kWords)
                 let sKEnd := add(sP, kWords)
+                let nMain := add(nP, and(kWords, not(0x7f)))
                 let sBase := sP
                 for {} lt(sBase, sKEnd) { sBase := add(sBase, 0x20) } {
                     let m := mul(mload(sBase), n0inv)
+                    let carry := 0
+                    let sOff := sBase
+                    let nOff := nP
 
-                    // Peel j = 0: m*n[0] + s[base] ≡ 0 mod 2^256 by construction and
-                    // s[base] is never read again — only the carry survives.
-                    let carry
-                    {
-                        let n0 := mload(nP)
-                        let lo := mul(m, n0)
-                        let mmr := mulmod(m, n0, not(0))
-                        carry := add(
-                            sub(sub(mmr, lo), lt(mmr, lo)),   // hi
-                            lt(add(lo, mload(sBase)), lo)     // carry out of lo + s[base]
-                        )
+                    // j = 0 stores the (provably zero) low limb back into s[base],
+                    // which is never read again, so all k limbs share one path.
+                    for {} lt(nOff, nMain) {
+                        nOff := add(nOff, 0x80)
+                        sOff := add(sOff, 0x80)
+                    } {
+                        {
+                            let nj := mload(nOff)
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(sOff))
+                            let s2 := add(s1, carry)
+                            mstore(sOff, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let sA := add(sOff, 0x20)
+                            let nj := mload(add(nOff, 0x20))
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(sA))
+                            let s2 := add(s1, carry)
+                            mstore(sA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let sA := add(sOff, 0x40)
+                            let nj := mload(add(nOff, 0x40))
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(sA))
+                            let s2 := add(s1, carry)
+                            mstore(sA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let sA := add(sOff, 0x60)
+                            let nj := mload(add(nOff, 0x60))
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(sA))
+                            let s2 := add(s1, carry)
+                            mstore(sA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
                     }
 
-                    let sOff := add(sBase, 0x20)
-                    for { let nOff := add(nP, 0x20) } lt(nOff, nEnd) {
+                    for {} lt(nOff, nEnd) {
                         nOff := add(nOff, 0x20)
                         sOff := add(sOff, 0x20)
                     } {
                         let nj := mload(nOff)
                         let lo := mul(m, nj)
                         let mmr := mulmod(m, nj, not(0))
-                        let hi := sub(sub(mmr, lo), lt(mmr, lo))
-
                         let s1 := add(lo, mload(sOff))
-                        let c1 := lt(s1, lo)
                         let s2 := add(s1, carry)
                         mstore(sOff, s2)
-                        carry := add(hi, add(c1, lt(s2, s1)))
+                        carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
                     }
 
-                    // Propagate carry into s[i+k..2k]
+                    // Propagate carry into s[base+k..2k]
                     for {} gt(carry, 0) {} {
                         let val := mload(sOff)
                         let newVal := add(val, carry)
@@ -418,6 +539,7 @@ library ModexpMontgomery {
     // ── Montgomery multiplication (CIOS) ──────────────────────────────
 
     /// @dev Computes a * b * R^{-1} mod n using CIOS (Coarsely Integrated Operand Scanning).
+    ///      Both O(k²) passes are unrolled 4x; see `_montSqr` for why.
     function _montMul(
         uint256[] memory a,
         uint256[] memory b,
@@ -434,8 +556,10 @@ library ModexpMontgomery {
             let resP := add(res, 0x20)
             let kW := shl(5, k)
 
-            // Allocate scratch t[0..k+1]
-            let tP := mload(0x40)
+            // Allocate scratch [scrap][t[0..k+1]]. The scrap word below t[0]
+            // absorbs the reduce pass's discarded low limb, which lets that pass
+            // run uniformly over all k limbs instead of peeling j = 0.
+            let tP := add(mload(0x40), 0x20)
             let tEnd := add(tP, kW) // &t[k]
             mstore(0x40, add(tEnd, 0x40))
 
@@ -443,6 +567,10 @@ library ModexpMontgomery {
             for { let p := tP } lt(p, add(tEnd, 0x40)) { p := add(p, 0x20) } {
                 mstore(p, 0)
             }
+
+            // Bound of the 4-limb-at-a-time section; the remainder (k mod 4
+            // limbs) is handled by the single-step tail loops.
+            let tMain := add(tP, and(kW, not(0x7f)))
 
             // Main CIOS loop: one iteration per limb of a
             let aEnd := add(aP, kW)
@@ -453,23 +581,65 @@ library ModexpMontgomery {
                 {
                     let carry := 0
                     let bOff := bP
-                    for { let tOff := tP } lt(tOff, tEnd) {
+                    let tOff := tP
+
+                    for {} lt(tOff, tMain) {
+                        tOff := add(tOff, 0x80)
+                        bOff := add(bOff, 0x80)
+                    } {
+                        {
+                            let bj := mload(bOff)
+                            let lo := mul(ai, bj)
+                            let mmr := mulmod(ai, bj, not(0))
+                            let s1 := add(lo, mload(tOff))
+                            let s2 := add(s1, carry)
+                            mstore(tOff, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let tA := add(tOff, 0x20)
+                            let bj := mload(add(bOff, 0x20))
+                            let lo := mul(ai, bj)
+                            let mmr := mulmod(ai, bj, not(0))
+                            let s1 := add(lo, mload(tA))
+                            let s2 := add(s1, carry)
+                            mstore(tA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let tA := add(tOff, 0x40)
+                            let bj := mload(add(bOff, 0x40))
+                            let lo := mul(ai, bj)
+                            let mmr := mulmod(ai, bj, not(0))
+                            let s1 := add(lo, mload(tA))
+                            let s2 := add(s1, carry)
+                            mstore(tA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let tA := add(tOff, 0x60)
+                            let bj := mload(add(bOff, 0x60))
+                            let lo := mul(ai, bj)
+                            let mmr := mulmod(ai, bj, not(0))
+                            let s1 := add(lo, mload(tA))
+                            let s2 := add(s1, carry)
+                            mstore(tA, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                    }
+
+                    // Tail: k mod 4 limbs
+                    for {} lt(tOff, tEnd) {
                         tOff := add(tOff, 0x20)
                         bOff := add(bOff, 0x20)
                     } {
                         let bj := mload(bOff)
-
-                        // Full 512-bit product: (hi, lo) = ai * bj
                         let lo := mul(ai, bj)
                         let mmr := mulmod(ai, bj, not(0))
-                        let hi := sub(sub(mmr, lo), lt(mmr, lo))
-
-                        // Accumulate: sum = lo + t[j] + carry
                         let s1 := add(lo, mload(tOff))
-                        let c1 := lt(s1, lo)
                         let s2 := add(s1, carry)
                         mstore(tOff, s2)
-                        carry := add(hi, add(c1, lt(s2, s1)))
+                        carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
                     }
 
                     // Propagate carry into t[k] and t[k+1]
@@ -483,40 +653,69 @@ library ModexpMontgomery {
                 // Step 2: Reduce pass — m = t[0]*n0inv; t += m*n; shift right one word
                 {
                     let m := mul(mload(tP), n0inv)
+                    let carry := 0
+                    let nOff := nP
+                    let tOff := tP
 
-                    // Peel j = 0: by construction m*n[0] + t[0] ≡ 0 mod 2^256, so the
-                    // low word is exactly 0 and is discarded by the shift — only the
-                    // carry survives.
-                    let carry
-                    {
-                        let n0 := mload(nP)
-                        let lo := mul(m, n0)
-                        let mmr := mulmod(m, n0, not(0))
-                        carry := add(
-                            sub(sub(mmr, lo), lt(mmr, lo)), // hi
-                            lt(add(lo, mload(tP)), lo)      // carry out of lo + t[0]
-                        )
+                    // j = 0 writes the (provably zero) low limb into the scrap
+                    // word at tP - 0x20, so every limb takes the same path.
+                    for {} lt(tOff, tMain) {
+                        tOff := add(tOff, 0x80)
+                        nOff := add(nOff, 0x80)
+                    } {
+                        {
+                            let nj := mload(nOff)
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(tOff))
+                            let s2 := add(s1, carry)
+                            mstore(sub(tOff, 0x20), s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let tA := add(tOff, 0x20)
+                            let nj := mload(add(nOff, 0x20))
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(tA))
+                            let s2 := add(s1, carry)
+                            mstore(tOff, s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let tA := add(tOff, 0x40)
+                            let nj := mload(add(nOff, 0x40))
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(tA))
+                            let s2 := add(s1, carry)
+                            mstore(add(tOff, 0x20), s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
+                        {
+                            let tA := add(tOff, 0x60)
+                            let nj := mload(add(nOff, 0x60))
+                            let lo := mul(m, nj)
+                            let mmr := mulmod(m, nj, not(0))
+                            let s1 := add(lo, mload(tA))
+                            let s2 := add(s1, carry)
+                            mstore(add(tOff, 0x40), s2)
+                            carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
+                        }
                     }
 
-                    let nOff := add(nP, 0x20)
-                    for { let tOff := add(tP, 0x20) } lt(tOff, tEnd) {
+                    // Tail: k mod 4 limbs
+                    for {} lt(tOff, tEnd) {
                         tOff := add(tOff, 0x20)
                         nOff := add(nOff, 0x20)
                     } {
                         let nj := mload(nOff)
-
                         let lo := mul(m, nj)
                         let mmr := mulmod(m, nj, not(0))
-                        let hi := sub(sub(mmr, lo), lt(mmr, lo))
-
                         let s1 := add(lo, mload(tOff))
-                        let c1 := lt(s1, lo)
                         let s2 := add(s1, carry)
-
-                        // Shift down: write result to t[j-1] (division by 2^256)
                         mstore(sub(tOff, 0x20), s2)
-
-                        carry := add(hi, add(c1, lt(s2, s1)))
+                        carry := add(sub(sub(mmr, lo), lt(mmr, lo)), add(lt(s1, lo), lt(s2, s1)))
                     }
 
                     // Propagate carry into upper limbs (with shift)
