@@ -300,7 +300,10 @@ library LimbMath {
                 bool doRefinement;
                 if (uHi >= vTop) {
                     qHat = type(uint256).max;
-                    rHat = uLo + vTop;
+                    // Algorithm D uses the wrapped sum below to detect carry in doRefinement.
+                    unchecked {
+                        rHat = uLo + vTop;
+                    }
                     doRefinement = (rHat >= uLo);
                 } else {
                     (qHat, rHat) = div512by256(uHi, uLo, vTop);
