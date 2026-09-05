@@ -93,6 +93,21 @@ contract ModexpDeployedTest is Test {
         assertEq(outDep, outPre);
     }
 
+    function test_identical_schoolbook_saturated_estimate_wrap() public view {
+        uint256 halfWord = uint256(1) << 255;
+        bytes memory input = _encodeInput(
+            abi.encodePacked(bytes32(halfWord), bytes32(halfWord), bytes32(0)),
+            hex"01",
+            abi.encodePacked(bytes32(halfWord), bytes32(halfWord + 1))
+        );
+
+        (bool okPre, bytes memory outPre) = _callPrecompile(input);
+        (bool okDep, bytes memory outDep) = _callDeployed(input);
+        assertTrue(okPre);
+        assertTrue(okDep);
+        assertEq(outDep, outPre);
+    }
+
     function test_identical_even_modulus() public view {
         // 3^7 mod 10
         bytes memory input = _encodeInput(
